@@ -18,7 +18,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v1
         with:
+
           node-version: 18.x
+
 
       - name: Install Cordova
         run: npm install -g cordova
