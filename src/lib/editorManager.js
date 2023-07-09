@@ -5,7 +5,12 @@ import appSettings from './settings';
 import EditorFile from './editorFile';
 import sidebarApps from 'sidebarApps';
 import quickTools from 'components/quickTools';
+import keyboardHandler from 'handlers/keyboard';
+import initColorView from 'ace/colorView';
+import { keydownState } from 'handlers/keyboard';
+import { deactivateColorView } from 'ace/colorView';
 import { setCommands, setKeyBindings } from 'ace/commands';
+import { HARDKEYBOARDHIDDEN_NO, getSystemConfiguration } from './systemConfiguration';
 
 //TODO: Add option to work multiple files at same time in large display.
 
@@ -20,7 +25,6 @@ async function EditorManager($header, $body) {
    */
   let $openFileList;
   let TIMEOUT_VALUE = 500;
-  let heightOffset = Math.round(screen.height - innerHeight);
   let preventScrollbarV = false;
   let preventScrollbarH = false;
   let scrollBarVisibilityCount = 0;
@@ -76,6 +80,9 @@ async function EditorManager($header, $body) {
     getEditorWidth,
     header: $header,
     container: $container,
+    get isScrolling() {
+      return isScrolling;
+    },
     get openFileList() {
       if (!$openFileList) initFileTabContainer();
       return $openFileList;
@@ -113,33 +120,13 @@ async function EditorManager($header, $body) {
     }
   };
 
+  // set mode text
+  editor.setSession(ace.createEditSession('', 'ace/mode/text'));
   $body.appendChild($container);
   await setupEditor();
 
   $hScrollbar.onshow = $vScrollbar.onshow = updateFloatingButton.bind({}, false);
   $hScrollbar.onhide = $vScrollbar.onhide = updateFloatingButton.bind({}, true);
-
-  window.addEventListener('resize', () => {
-    const { activeFile } = manager;
-    const screenHeight = screen.height - heightOffset;
-    const ratio = Math.round((screenHeight / innerHeight) * 10) / 10;
-    if (ratio === 1 && activeFile.focusedBefore) {
-      editor.blur();
-      activeFile.focused = false;
-      activeFile.focusedBefore = false;
-    } else {
-      activeFile.focusedBefore = activeFile.focused;
-    }
-    if (isScrolling) return;
-    // $vScrollbar.hide();
-    // $hScrollbar.hide();
-    setTimeout(() => {
-      if (isCursorVisible()) return;
-      editor.renderer.scrollCursorIntoView();
-      editor.renderer.scrollBy(0, appSettings.value.teardropSize + 10);
-      editor._emit('scroll-intoview');
-    }, 100);
-  });
 
   appSettings.on('update:textWrap', function (value) {
     if (!value) {
@@ -223,6 +210,14 @@ async function EditorManager($header, $body) {
     editor.setOption('printMarginColumn', value);
   });
 
+  appSettings.on('update:colorPreview', function (value) {
+    if (value) {
+      return initColorView(editor, true);
+    }
+
+    deactivateColorView();
+  });
+
   return manager;
 
   /**
@@ -240,19 +235,44 @@ async function EditorManager($header, $body) {
     let checkTimeout = null;
     let autosaveTimeout;
     let scrollTimeout;
+
     const Emmet = ace.require('ace/ext/emmet');
     const settings = appSettings.value;
+    const textInput = editor.textInput.getElement();
 
-    editor.on('focus', () => {
+    editor.on('focus', async () => {
       const { activeFile } = manager;
       activeFile.focused = true;
+      keyboardHandler.on('keyboardShow', scrollCursorIntoView);
+
+      if (isScrolling) return;
+
       $hScrollbar.hide();
       $vScrollbar.hide();
-      // scroll active line into middle of screen
-      editor.renderer.scrollCursorIntoView();
     });
 
-    editor.on('change', function (e) {
+    editor.on('blur', async () => {
+      const { hardKeyboardHidden, keyboardHeight } = await getSystemConfiguration();
+      const blur = () => {
+        const { activeFile } = manager;
+        activeFile.focused = false;
+        activeFile.focusedBefore = false;
+      };
+
+      if (hardKeyboardHidden === HARDKEYBOARDHIDDEN_NO && keyboardHeight < 100) { // external keyboard
+        blur();
+        return;
+      }
+
+      const onKeyboardHide = () => {
+        keyboardHandler.off('keyboardHide', onKeyboardHide);
+        blur();
+      };
+
+      keyboardHandler.on('keyboardHide', onKeyboardHide);
+    });
+
+    editor.on('change', (e) => {
       if (checkTimeout) clearTimeout(checkTimeout);
       if (autosaveTimeout) clearTimeout(autosaveTimeout);
 
@@ -292,6 +312,15 @@ async function EditorManager($header, $body) {
 
     editor.on('scrolltop', onscrolltop);
     editor.on('scrollleft', onscrollleft);
+    textInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        keydownState.esc = { value: true, target: textInput };
+      }
+    });
+
+    if (settings.colorPreview) {
+      initColorView(editor);
+    }
 
     touchListeners(editor);
     setCommands(editor);
@@ -321,7 +350,7 @@ async function EditorManager($header, $body) {
     editor.setOption('printMarginColumn', settings.printMargin);
     editor.setOption('enableBasicAutocompletion', true);
     editor.setOption('enableLiveAutocompletion', settings.liveAutoCompletion);
-    editor.setOption('enableInlineAutocompletion', settings.inlineAutoCompletion);
+    // editor.setOption('enableInlineAutocompletion', settings.inlineAutoCompletion);
 
     if (!appSettings.value.textWrap) {
       editor.renderer.setScrollMargin(0, 0, 0, settings.leftMargin);
@@ -332,22 +361,28 @@ async function EditorManager($header, $body) {
     }
   }
 
+  function scrollCursorIntoView() {
+    keyboardHandler.off('keyboardShow', scrollCursorIntoView);
+    if (isCursorVisible()) return;
+    const { teardropSize } = appSettings.value;
+    editor.renderer.scrollCursorIntoView();
+    editor.renderer.scrollBy(0, teardropSize + 10);
+    editor._emit('scroll-intoview');
+  }
+
   /**
    * Checks if the cursor is visible within the Ace editor.
    * @returns {boolean} - True if the cursor is visible, false otherwise.
    */
   function isCursorVisible() {
-    const renderer = editor.renderer;
+    const { editor, container } = editorManager;
+    const { teardropSize } = appSettings.value;
     const cursorPos = editor.getCursorPosition();
-    const contentTop = $container.getBoundingClientRect().top;
-    const contentBottom = contentTop + $container.clientHeight;
-    let cursorTop = renderer.textToScreenCoordinates(cursorPos.row, cursorPos.column).pageY;
-
-    if (cursorTop === contentTop) return true;
-
-    cursorTop -= appSettings.value.teardropSize + 10;
-
-    return cursorTop >= contentTop && cursorTop <= contentBottom;
+    const contentTop = container.getBoundingClientRect().top;
+    const contentBottom = contentTop + container.clientHeight;
+    const cursorTop = editor.renderer.textToScreenCoordinates(cursorPos.row, cursorPos.column).pageY;
+    const cursorBottom = cursorTop + teardropSize + 10;
+    return cursorTop >= contentTop && cursorBottom <= contentBottom;
   }
 
   /**
@@ -546,7 +581,7 @@ async function EditorManager($header, $body) {
   }
 
   /**
-   *
+   * Gets a file from the file manager
    * @param {string|number} checkFor
    * @param {"id"|"name"|"uri"} [type]
    * @returns {File}

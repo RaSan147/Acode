@@ -248,9 +248,6 @@ export default class EditorFile {
 
     this.#onFilePosChange();
     this.#tab.addEventListener('click', tabOnclick.bind(this));
-    this.#tab.addEventListener('touchstart', () => {
-      this.focusedBefore = editorManager.editor.isFocused();
-    });
     appSettings.on('update:openFileListPos', this.#onFilePosChange);
 
     addFile(this);
@@ -658,9 +655,14 @@ export default class EditorFile {
    */
   makeActive() {
     const { activeFile, editor, switchFile } = editorManager;
-    if (activeFile?.id === this.id) return;
 
-    activeFile?.removeActive();
+
+    if (activeFile) {
+      if (activeFile.id === this.id) return;
+      activeFile.focusedBefore = activeFile.focused;
+      activeFile.removeActive();
+    }
+
     switchFile(this.id);
 
     if (this.focused) {
@@ -745,7 +747,7 @@ export default class EditorFile {
   async #fileAction(action, mimeType) {
     try {
       const uri = await this.#getShareableUri();
-      if (!mimeType) mimeType = mimeTypes.lookup(this.name);
+      if (!mimeType) mimeType = mimeTypes.lookup(this.name) || 'text/plain';
       system.fileAction(uri, this.filename, action, mimeType, this.#showNoAppError);
     } catch (error) {
       toast(strings.error);

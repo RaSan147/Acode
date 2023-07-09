@@ -1,10 +1,16 @@
 import themes from './themes';
 import appSettings from './settings';
-import { Irid } from 'irid';
+import Color from 'utils/color';
 
 let busy = false;
 let lastCall;
 
+/**
+ * Restores the theme or darkens the status bar and navigation bar
+ * Used when dialogs are opened which has mask that darkens the background
+ * @param {boolean} darken Whether to darken the status bar and navigation bar
+ * @returns 
+ */
 export default function restoreTheme(darken) {
   if (busy) {
     lastCall = darken;
@@ -27,9 +33,8 @@ export default function restoreTheme(darken) {
     theme.darkenedPrimaryColor === theme.primaryColor) {
     theme.darkenPrimaryColor();
   }
-  const hexColor = Irid(
-    darken ? theme.darkenedPrimaryColor : theme.primaryColor,
-  ).toHexString();
+  const color = darken ? theme.darkenedPrimaryColor : theme.primaryColor;
+  const hexColor = Color(color).hex.toString();
   system.setUiTheme(hexColor, theme.type, () => {
     busy = false;
     if (lastCall !== undefined) {

@@ -23,6 +23,7 @@ import confirm from 'dialogs/confirm';
 import select from 'dialogs/select';
 import prompt from 'dialogs/prompt';
 import color from 'dialogs/color';
+import { getColorRange } from 'utils/color/regex';
 
 export default {
   async 'close-all-tabs'() {
@@ -245,24 +246,24 @@ export default {
   'toggle-editmenu'() {
     tag.get('[action=toggle-edit-menu')?.click();
   },
-  'insert-color'() {
+  async 'insert-color'() {
     const { editor } = editorManager;
-    let selectedText = editor.session.getTextRange(editor.getSelectionRange());
-
-    if (!helpers.isValidColor(selectedText)) {
-      selectedText = undefined;
-    }
+    const range = getColorRange();
+    let defaultColor = range ? editor.session.getTextRange(range) : '';
 
     editor.blur();
-    (async () => {
-      const wasFocused = editorManager.activeFile.focused;
-      const res = await color(selectedText, () => {
-        if (wasFocused) {
-          editor.focus();
-        }
-      });
-      editor.insert(res);
-    })();
+    const wasFocused = editorManager.activeFile.focused;
+    const res = await color(defaultColor, () => {
+      if (wasFocused) {
+        editor.focus();
+      }
+    });
+
+    if (range) {
+      editor.session.replace(range, res);
+      return;
+    }
+    editor.insert(res);
   },
   'copy'() {
     editorManager.editor.execCommand('copy');

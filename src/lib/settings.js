@@ -131,7 +131,7 @@ class Settings {
       rtlText: false,
       hardWrap: false,
       useTextareaForIME: false,
-      touchMoveThreshold: Math.round((1 / devicePixelRatio) * 10) / 10,
+      touchMoveThreshold: Math.round((1 / devicePixelRatio) * 10) / 5,
       quicktoolsItems: [...Array(this.#QUICKTOOLS_SIZE).keys()],
       excludeFolders: this.#excludeFolders,
       maxFilesCount: 500,
@@ -139,6 +139,7 @@ class Settings {
       maxDirCount: 100,
       defaultFileEncoding: 'UTF-8',
       inlineAutoCompletion: true,
+      colorPreview: true,
     };
     this.value = structuredClone(this.#defaultSettings);
   }
