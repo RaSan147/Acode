@@ -1,6 +1,6 @@
 # Change Log
 
-## [1.8.6] - Build 305
+## [1.8.6] - Build 310
 
 - New
   - [x] **Search in settings**
@@ -9,6 +9,8 @@
   - [x] **Language**
     - Updated language pack for Russian, Spanish, Portuguese and Deutsche.
 - Fixes
+  - [x] **Sidebar search**
+    - Fixed sidebar search not rendering words with special characters.
   - [x] **Not Loading**
     - Fixed app not loading on older devices.
 
