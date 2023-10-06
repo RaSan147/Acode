@@ -45,11 +45,11 @@ $script3;
 echo \"${RED}$script4${NC}\";
 $script4;
 for f in *; do
-  echo "File -> $f"
+  echo \"File -> $f\"
 done
 echo \"${RED}$script5${NC}\";
 $script5
 for f in *; do
-  echo "File -> $f"
+  echo \"File -> $f\"
 done
 "
