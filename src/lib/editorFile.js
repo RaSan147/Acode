@@ -826,9 +826,9 @@ export default class EditorFile {
         if (!fileExists && cacheExists) {
           this.deletedFile = true;
           this.isUnsaved = true;
-        } else if (fileExists) {
+        } else if (!cacheExists && fileExists) {
           value = await file.readFile(this.encoding);
-        } else {
+        } else if (!cacheExists && !fileExists) {
           throw new Error('Unable to load file');
         }
       }
@@ -949,6 +949,9 @@ export default class EditorFile {
     this.session.on('changeScrollTop', EditorFile.#onscrolltop);
     this.session.on('changeScrollLeft', EditorFile.#onscrollleft);
     this.session.on('changeFold', EditorFile.#onfold);
+    this.session.on('changeAnnotation', () => {
+      editorManager.editor._emit('changeAnnotation', this);
+    });
   }
 
   #destroy() {
