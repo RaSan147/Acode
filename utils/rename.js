@@ -43,9 +43,16 @@ const exec = promisify(require('child_process').exec);
     
     name = '../' + id + '_' + version + build + ext;
     target = path.resolve(__dirname, name);
+
+    dir1 = path.resolve('../', name)
+    fs.readdir(dir1, (err, files) => {
+      files.forEach(file => {
+        console.log(file);
+      });
+    });
     
     console.log(artifact + " -> " + target);
-    fs.rename(artifact, target, () => {});
+    fs.rename(artifact, target);
 
     process.exit(0);
   } catch (error) {
