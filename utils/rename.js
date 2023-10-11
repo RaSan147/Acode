@@ -43,9 +43,19 @@ const exec = promisify(require('child_process').exec);
     
     name = '../' + id + '_' + version + build + ext;
     target = path.resolve(__dirname, name);
+
+    var onlyPath = require('path').dirname(artifact)
+    fs.readdir(onlyPath, (err, files) => {
+      files.forEach(file => {
+        console.log(file);
+      });
+    });
     
     console.log(artifact + " -> " + target);
-    fs.rename(artifact, target, () => {});
+    fs.copyFile(artifact, target, (err) => {
+  if (err) throw err;
+  console.log(artifact + ' was copied to ' + target);
+});
 
     process.exit(0);
   } catch (error) {
