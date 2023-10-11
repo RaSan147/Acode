@@ -52,7 +52,16 @@ const exec = promisify(require('child_process').exec);
     });
     
     console.log(artifact + " -> " + target);
-    fs.rename(artifact, target);
+    fs.rename(artifact, target, (error) => { 
+  if (error) { 
+    // Show the error  
+    console.log(error); 
+  } 
+
+  else { 
+    console.log("\nFile Renamed\n");
+  } 
+}); 
 
     process.exit(0);
   } catch (error) {
