@@ -44,24 +44,18 @@ const exec = promisify(require('child_process').exec);
     name = '../' + id + '_' + version + build + ext;
     target = path.resolve(__dirname, name);
 
-    dir1 = path.resolve('../', name)
-    fs.readdir(dir1, (err, files) => {
+    var onlyPath = require('path').dirname(artifact)
+    fs.readdir(onlyPath, (err, files) => {
       files.forEach(file => {
         console.log(file);
       });
     });
     
     console.log(artifact + " -> " + target);
-    fs.rename(artifact, target, (error) => { 
-  if (error) { 
-    // Show the error  
-    console.log(error); 
-  } 
-
-  else { 
-    console.log("\nFile Renamed\n");
-  } 
-}); 
+    fs.copyFile(artifact, target, (err) => {
+  if (err) throw err;
+  console.log(artifact + ' was copied to ' + target);
+});
 
     process.exit(0);
   } catch (error) {
