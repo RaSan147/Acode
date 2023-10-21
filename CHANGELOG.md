@@ -16,7 +16,7 @@
     - New `danger-color` and `danger-text-color` theme color.
   - [x] **New key binding** | 318
     - Use `Ctrl+Shift+X` key binding to open problems page.
-  - [x] **Plugin** | 319
+  - [x] **Plugin** | 320
     - Install plugin directly from browser.
 - Fixes
   - [x] **Plugin page** | 318
@@ -26,6 +26,10 @@
     - Fixed unsaved changes not showing up in file when app restarted.
   - [x] **Quicktools** | 319
     - Fixed quicktools slides back when touch moved slightly.
+  - [x] **Settings** | 321
+    - Fixed settings not saving properly.
+  - [x] **Internal storage** | 322
+    - Fixed renaming file.
 
 
 ## [1.8.6] - Build 313
