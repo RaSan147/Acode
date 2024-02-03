@@ -1,9 +1,9 @@
 echo "Setting up the project..."
 
 npm install
-apt-get install android-sdk
+sudo apt-get install android-sdk
 export ANDROID_HOME=/usr/lib/android-sdk
-apt install sdkmanager
+sudo apt install sdkmanager
 cordova platform add android@10
 cordova plugin add cordova-plugin-buildinfo
 cordova plugin add cordova-plugin-device
