@@ -43,10 +43,6 @@ module.exports = (env, options) => {
   // if (mode === 'production') {
   rules.push({
     test: /\.m?js$/,
-    // exclude: {
-    //   and: [/node_modules/],
-    //   not: [/(minimatch|marked|filesize)/]
-    // },
     use: [
       'html-tag-js/jsx/tag-loader.js',
       {
