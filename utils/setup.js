@@ -13,11 +13,19 @@ const path = require('path');
 const PLATFORM_FILES = ['.DS_Store'];
 
 execSync('npm install', { stdio: 'inherit' });
+
 execSync('sudo apt-get install android-sdk', { stdio: 'inherit' });
 execSync('export ANDROID_HOME=/usr/lib/android-sdk', { stdio: 'inherit' });
-execSync('cordova platform add android@10', { stdio: 'inherit' });
+
+try {
+  execSync('cordova platform add android', { stdio: 'inherit' });
+} catch (error) {
+  // ignore
+}
+
 execSync('cordova prepare', { stdio: 'inherit' });
 execSync('mkdir -p www/css/build www/js/build', { stdio: 'inherit' });
+
 execSync('cordova plugin add cordova-plugin-buildinfo', { stdio: 'inherit' });
 execSync('cordova plugin add cordova-plugin-device', { stdio: 'inherit' });
 execSync('cordova plugin add cordova-plugin-file', { stdio: 'inherit' });
