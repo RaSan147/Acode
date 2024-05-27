@@ -36,4 +36,4 @@ plugins.forEach(plugin => {
   execSync(`cordova plugin add ./src/plugins/${plugin}`, { stdio: 'inherit' });
 });
 
-execSync('sdkmanager "build-tools;30.0.3"', { stdio: 'inherit' });
+execSync('sdkmanager "build-tools;34.0.0"', { stdio: 'inherit' });
