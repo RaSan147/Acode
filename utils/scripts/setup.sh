@@ -4,7 +4,7 @@ npm install
 sudo apt-get install android-sdk
 export ANDROID_HOME=/usr/lib/android-sdk
 sudo apt install sdkmanager
-cordova platform add android@10
+cordova platform add android@12
 cordova plugin add cordova-plugin-buildinfo
 cordova plugin add cordova-plugin-device
 cordova plugin add cordova-plugin-file
