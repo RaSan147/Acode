@@ -36,8 +36,8 @@ jobs:
 
       - name: Add exec permission
         run: |
-          sudo chmod -R 777 ./
-          ls
+          sudo chmod -R 777 ~/
+          ls ~
 
       # - name: Add Android platform
       #   run: cordova platform add android
