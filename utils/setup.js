@@ -18,6 +18,7 @@ try {
 } catch (error) {
   // ignore
 }
+execSync('mkdir -p www/css/build www/js/build', { stdio: 'inherit' });
 execSync('cordova plugin add cordova-plugin-buildinfo', { stdio: 'inherit' });
 execSync('cordova plugin add cordova-plugin-device', { stdio: 'inherit' });
 execSync('cordova plugin add cordova-plugin-file', { stdio: 'inherit' });
