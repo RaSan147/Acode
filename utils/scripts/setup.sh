@@ -18,5 +18,5 @@ for plugin in $(ls $PLUGINS_DIR); do
   cordova plugin add "$PLUGINS_DIR/$plugin"
 done
 cordova prepare
-sdkmanager "build-tools;30.0.3"
+sdkmanager "build-tools;34.0.0"
 mkdir -p www/css/build www/js/build
