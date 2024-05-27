@@ -37,7 +37,7 @@ jobs:
       - name: Add exec permission
         run: |
           sudo chmod -R 777 ./
-          sudo chmod -R 777 ~/.gradle
+          ls
 
       # - name: Add Android platform
       #   run: cordova platform add android
