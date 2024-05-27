@@ -22,12 +22,6 @@ jobs:
 
           node-version: 18.x
 
-      - name: Add exec permission
-        run: |
-          sudo chmod -R 777 ./
-          sudo chmod -R 777 ~/.gradle
-
-
       - name: Install Cordova
         run: npm install -g cordova
 
@@ -39,6 +33,11 @@ jobs:
 
       - name: Configure the platform
         run: yarn clean
+
+      - name: Add exec permission
+        run: |
+          sudo chmod -R 777 ./
+          sudo chmod -R 777 ~/.gradle
 
       # - name: Add Android platform
       #   run: cordova platform add android
