@@ -54,13 +54,13 @@ jobs:
               ./sign.sh
 
       - name: Upload dev APK
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: app-dev
           path: ./*.apk
 
       - name: Upload release bundle
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: app-release
           path: ./*.aab
