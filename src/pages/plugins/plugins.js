@@ -235,7 +235,8 @@ export default function PluginsInclude(updates) {
       return plugins.map((plugin) => <Item {...plugin} />);
     } catch (error) {
       $list.all.setAttribute("empty-msg", strings["error"]);
-      console.error(error);
+      window.log("error", "Failed to search remotely:");
+      window.log("error", error);
       return []; // Return an empty array on error
     }
   }
@@ -253,7 +254,8 @@ export default function PluginsInclude(updates) {
       return await response.json();
     } catch (error) {
       $list.all.setAttribute("empty-msg", strings["error"]);
-      console.error(error);
+      window.log("error", "Failed to filter plugins:");
+      window.log("error", error);
       return [];
     }
   }
@@ -281,7 +283,7 @@ export default function PluginsInclude(updates) {
 
       $list.all.setAttribute("empty-msg", strings["no plugins found"]);
     } catch (error) {
-      console.error(error);
+      window.log("error", error);
     }
   }
 
@@ -353,13 +355,6 @@ export default function PluginsInclude(updates) {
 
   async function addSource(sourceType, value = "https://") {
     let source;
-
-    const clipboardData = await getClipboardData();
-
-    if (clipboardData && clipboardData.startsWith("https")) {
-      value = clipboardData;
-    }
-
     if (sourceType === "remote") {
       source = await prompt("Enter plugin source", value, "url");
     } else {
@@ -375,12 +370,5 @@ export default function PluginsInclude(updates) {
       window.toast(helpers.errorMessage(error));
       addSource(sourceType, source);
     }
-  }
-
-  async function getClipboardData() {
-    return new Promise((resolve) => {
-      const { clipboard } = cordova.plugins;
-      clipboard.paste(resolve);
-    });
   }
 }

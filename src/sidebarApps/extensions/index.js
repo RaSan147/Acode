@@ -5,6 +5,7 @@ import Sidebar from "components/sidebar";
 import select from "dialogs/select";
 import fsOperation from "fileSystem";
 import constants from "lib/constants";
+import InstallState from "lib/installState";
 import settings from "lib/settings";
 import plugin from "pages/plugin";
 import Url from "utils/Url";
@@ -157,7 +158,8 @@ async function filterPlugins() {
 			updateHeight($searchResult);
 		}
 	} catch (error) {
-		console.error("Error filtering plugins:", error);
+		window.log("error", "Error filtering plugins:");
+		window.log("error", error);
 		$searchResult.content = <span className="error">{strings["error"]}</span>;
 	} finally {
 		$searchResult.classList.remove("loading");
@@ -233,7 +235,7 @@ async function getFilteredPlugins(filterName) {
 		}
 		return await response.json();
 	} catch (error) {
-		console.error(error);
+		window.log("error", error);
 	}
 }
 
@@ -359,7 +361,12 @@ async function loadAd(el) {
 async function uninstall(id) {
 	try {
 		const pluginDir = Url.join(PLUGIN_DIR, id);
-		await Promise.all([loadAd(this), fsOperation(pluginDir).delete()]);
+		const state = await InstallState.new(id);
+		await Promise.all([
+			loadAd(this),
+			fsOperation(pluginDir).delete(),
+			state.delete(state.storeUrl),
+		]);
 		acode.unmountPlugin(id);
 		if (!IS_FREE_VERSION && (await window.iad?.isLoaded())) {
 			window.iad.show();

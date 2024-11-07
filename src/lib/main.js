@@ -30,6 +30,7 @@ import EditorFile from "lib/editorFile";
 import EditorManager from "lib/editorManager";
 import lang from "lib/lang";
 import loadPlugins from "lib/loadPlugins";
+import Logger from "lib/logger";
 import openFolder from "lib/openFolder";
 import restoreFiles from "lib/restoreFiles";
 import settings from "lib/settings";
@@ -51,10 +52,12 @@ import { keydownState } from "handlers/keyboard";
 import { initFileList } from "lib/fileList";
 import { addedFolder } from "lib/openFolder";
 import { getEncoding, initEncodings } from "utils/encodings";
+import constants from "./constants";
 
 const previousVersionCode = Number.parseInt(localStorage.versionCode, 10);
 
 window.onload = Main;
+const logger = new Logger();
 
 async function Main() {
 	const oldPreventDefault = TouchEvent.prototype.preventDefault;
@@ -103,12 +106,27 @@ async function onDeviceReady() {
 	window.PLUGIN_DIR = Url.join(DATA_STORAGE, "plugins");
 	window.KEYBINDING_FILE = Url.join(DATA_STORAGE, ".key-bindings.json");
 	window.IS_FREE_VERSION = isFreePackage;
+	window.log = logger.log.bind(logger);
+
+	// Capture synchronous errors
+	window.addEventListener("error", function (event) {
+		const errorMsg = `Error: ${event.message}, Source: ${event.filename}, Line: ${event.lineno}, Column: ${event.colno}, Stack: ${event.error?.stack || "N/A"}`;
+		window.log("error", errorMsg);
+	});
+	// Capture unhandled promise rejections
+	window.addEventListener("unhandledrejection", function (event) {
+		window.log(
+			"error",
+			`Unhandled rejection: ${event.reason ? event.reason.message : "Unknown reason"}\nStack: ${event.reason ? event.reason.stack : "No stack available"}`,
+		);
+	});
 
 	startAd();
 
 	try {
 		await helpers.promisify(iap.startConnection).catch((e) => {
-			console.error("connection error:", e);
+			window.log("error", "connection error");
+			window.log("error", e);
 		});
 
 		if (localStorage.acode_pro === "true") {
@@ -127,7 +145,8 @@ async function onDeviceReady() {
 			}
 		}
 	} catch (error) {
-		console.error("Purchase error:", error);
+		window.log("error", "Purchase error");
+		window.log("error", error);
 	}
 
 	try {
@@ -180,12 +199,24 @@ async function onDeviceReady() {
 		oldResolveURL.call(this, Url.safe(url), ...args);
 	};
 
-	setTimeout(() => {
-		if (document.body.classList.contains("loading"))
+	setTimeout(async () => {
+		if (document.body.classList.contains("loading")) {
+			window.log("warn", "App is taking unexpectedly long time!");
 			document.body.setAttribute(
 				"data-small-msg",
 				"This is taking unexpectedly long time!",
 			);
+			// share the log file (but currently doesn't work)
+			// system.fileAction(
+			//   Url.join(DATA_STORAGE, constants.LOG_FILE_NAME),
+			//   constants.LOG_FILE_NAME,
+			//   "SEND",
+			//   "text/plain",
+			//   () => {
+			//     toast(strings["no app found to handle this file"]);
+			//   },
+			// );
+		}
 	}, 1000 * 10);
 
 	acode.setLoadingMessage("Loading settings...");
@@ -198,7 +229,7 @@ async function onDeviceReady() {
 	try {
 		await loadApp();
 	} catch (error) {
-		console.error(error);
+		window.log("error", error);
 		toast(`Error: ${error.message}`);
 	} finally {
 		setTimeout(() => {
@@ -338,6 +369,8 @@ async function loadApp() {
 	});
 	//#endregion
 
+	window.log("info", "Started app and services...");
+
 	new EditorFile();
 
 	checkPluginsUpdate()
@@ -369,6 +402,8 @@ async function loadApp() {
 	try {
 		await loadPlugins();
 	} catch (error) {
+		window.log("error", "Plugins loading failed!");
+		window.log("error", error);
 		toast("Plugins loading failed!");
 	}
 
@@ -384,7 +419,8 @@ async function loadApp() {
 		try {
 			await restoreFiles(files);
 		} catch (error) {
-			console.error(error);
+			window.log("error", "File loading failed!");
+			window.log("error", error);
 			toast("File loading failed!");
 		}
 	} else {

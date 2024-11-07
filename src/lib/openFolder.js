@@ -1,6 +1,7 @@
 import collapsableList from "components/collapsableList";
 import Sidebar from "components/sidebar";
 import tile from "components/tile";
+import alert from "dialogs/alert";
 import confirm from "dialogs/confirm";
 import prompt from "dialogs/prompt";
 import select from "dialogs/select";
@@ -350,15 +351,40 @@ function execOperation(type, action, url, $target, name) {
 		const confirmation = await confirm(strings.warning, msg);
 		if (!confirmation) return;
 		startLoading();
-		await fsOperation(url).delete();
+		if (!(await fsOperation(url).exists())) return;
+		// await fsOperation(url).delete();
 		recents.removeFile(url);
 		if (helpers.isFile(type)) {
+			await fsOperation(url).delete();
 			$target.remove();
 			const file = editorManager.getFile(url, "uri");
 			if (file) file.uri = null;
 			editorManager.onupdate("delete-file");
 			editorManager.emit("update", "delete-file");
 		} else {
+			if (url.startsWith("content://com.termux.documents/tree/")) {
+				const fs = fsOperation(url);
+				const entries = await fs.lsDir();
+				if (entries.length === 0) {
+					await fs.delete();
+				} else {
+					const deleteRecursively = async (currentUrl) => {
+						const currentFs = fsOperation(currentUrl);
+						const currentEntries = await currentFs.lsDir();
+						for (const entry of currentEntries) {
+							if (entry.isDirectory) {
+								await deleteRecursively(entry.url);
+							} else {
+								await fsOperation(entry.url).delete();
+							}
+						}
+						await currentFs.delete();
+					};
+					await deleteRecursively(url);
+				}
+			} else {
+				await fsOperation(url).delete();
+			}
 			recents.removeFolder(url);
 			helpers.updateUriOfAllActiveFiles(url, null);
 			$target.parentElement.remove();
@@ -371,6 +397,13 @@ function execOperation(type, action, url, $target, name) {
 	}
 
 	async function renameFile() {
+		if (
+			url.startsWith("content://com.termux.documents/tree/") &&
+			!helpers.isFile(type)
+		) {
+			alert(strings.warning, strings["rename not supported"]);
+			return;
+		}
 		let newName = await prompt(strings.rename, name, "text", {
 			match: constants.FILE_NAME_REGEX,
 			required: true,
@@ -381,7 +414,22 @@ function execOperation(type, action, url, $target, name) {
 
 		startLoading();
 		const fs = fsOperation(url);
-		const newUrl = await fs.renameTo(newName);
+		let newUrl;
+
+		if (
+			url.startsWith("content://com.termux.documents/tree/") &&
+			helpers.isFile(type)
+		) {
+			// Special handling for Termux content files
+			const newFilePath = Url.join(Url.dirname(url), newName);
+			const content = await fs.readFile();
+			await fsOperation(Url.dirname(url)).createFile(newName, content);
+			await fs.delete();
+			newUrl = newFilePath;
+		} else {
+			newUrl = await fs.renameTo(newName);
+		}
+
 		newName = Url.basename(newUrl);
 		$target.querySelector(":scope>.text").textContent = newName;
 		$target.dataset.url = newUrl;
