@@ -239,6 +239,23 @@ async function onDeviceReady() {
 			applySettings.afterRender();
 		}, 500);
 	}
+	setTimeout(() => {
+		checkPluginsUpdate()
+			.then((updates) => {
+				if (!updates.length) return;
+				acode.pushNotification(
+					"Plugin Updates",
+					`${updates.length} plugin${updates.length > 1 ? "s" : ""} ${updates.length > 1 ? "have" : "has"} new version${updates.length > 1 ? "s" : ""} available.`,
+					{
+						icon: "extension",
+						action: () => {
+							plugins(updates);
+						},
+					},
+				);
+			})
+			.catch(console.error);
+	}, 5000);
 }
 
 async function loadApp() {
@@ -408,25 +425,9 @@ async function loadApp() {
 
 	initFileList();
 
-	checkPluginsUpdate()
-		.then((updates) => {
-			if (!updates.length) return;
-			acode.pushNotification(
-				"Plugin Updates",
-				`${updates.length} plugin${updates.length > 1 ? "s" : ""} ${updates.length > 1 ? "have" : "has"} new version${updates.length > 1 ? "s" : ""} available.`,
-				{
-					icon: "extension",
-					action: () => {
-						plugins(updates);
-					},
-				},
-			);
-		})
-		.catch(console.error);
-
 	// Check for app updates
 	if (navigator.onLine) {
-		fetch("https://api.github.com/repos/deadlyjack/Acode/releases/latest")
+		fetch("https://api.github.com/repos/Acode-Foundation/Acode/releases/latest")
 			.then((res) => res.json())
 			.then((release) => {
 				// assuming version is in format v1.2.3

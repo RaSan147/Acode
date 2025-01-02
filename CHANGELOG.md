@@ -1,5 +1,34 @@
 # Change Log
 
+## v1.10.7 (955)
+
+* Update hu-hu.json by @summoner001 in https://github.com/Acode-Foundation/Acode/pull/1092
+* build(deps): bump path-to-regexp and express by @dependabot in https://github.com/Acode-Foundation/Acode/pull/1093
+* Update hu-hu.json by @summoner001 in https://github.com/Acode-Foundation/Acode/pull/1094
+* Exclude python `venv` and php `vendor` folders to speedup startup by @Jobians in https://github.com/Acode-Foundation/Acode/pull/1096
+* Update de-de.json to 1.10.6.954 by @Micha-he in https://github.com/Acode-Foundation/Acode/pull/1097
+* Update pl-pl.json by @andrewczm in https://github.com/Acode-Foundation/Acode/pull/1099
+* minor fixes and tweaks by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/1103
+  * Added new command(file explorer) to open file manager
+  * Added copy button to code blocks on plugin page
+  * some error logging for debugging
+  * few markdown tweaks
+* Updating Brazilian Portuguese language  by @sebastianjnuwu in https://github.com/Acode-Foundation/Acode/pull/1102
+* add className by @NezitX in https://github.com/Acode-Foundation/Acode/pull/1104
+* Add monochrome icon by @Npepperlinux in https://github.com/Acode-Foundation/Acode/pull/1108
+* fix: issue while making request to any ipv4, etc from app by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/1107
+* Update zh-cn.json and zh-hant.json by @LaunchLee in https://github.com/Acode-Foundation/Acode/pull/1109
+* fix: show "No matches found" when palette has no matching items by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/1110
+* build(deps): bump systeminformation from 5.21.8 to 5.23.14 by @dependabot in https://github.com/Acode-Foundation/Acode/pull/1111
+* Follow up for #1110 by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/1112
+* fix: cleanup plugin install state on failed installations by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/1113
+* feat: implement infinite scroll for plugin list by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/1114
+* feat: add quick install button for plugins in sidebar by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/1115
+* Plugin Dependencies by @alMukaafih in https://github.com/Acode-Foundation/Acode/pull/1030
+* updated install state to reflect fs behaviour of android by @alMukaafih in https://github.com/Acode-Foundation/Acode/pull/1118
+* fix: clean broken or half installed plugins on start by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/1121
+* few improvements by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/1122
+
 ## v1.10.6 (954)
 
 ### New Features

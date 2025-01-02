@@ -1,7 +1,7 @@
 {
   "name": "com.foxdebug.acode",
   "displayName": "Acode",
-  "version": "1.10.6",
+  "version": "1.10.7",
   "description": "Acode is a code editor for android",
   "scripts": {
     "lang": "node ./utils/lang.js",
@@ -24,9 +24,7 @@
       "cordova-clipboard": {},
       "cordova-plugin-buildinfo": {},
       "cordova-plugin-device": {},
-      "cordova-plugin-file": {
-        "ANDROIDX_WEBKIT_VERSION": "1.4.0"
-      },
+      "cordova-plugin-file": {},
       "cordova-plugin-sftp": {},
       "cordova-plugin-server": {},
       "cordova-plugin-ftp": {},

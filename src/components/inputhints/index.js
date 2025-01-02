@@ -70,7 +70,10 @@ export default function inputhints($input, hints, onSelect) {
 		const action = $el.getAttribute("action");
 		if (action !== "hint") return;
 		const value = $el.getAttribute("value");
-		if (!value) return;
+		if (!value) {
+			onblur();
+			return;
+		}
 		$input.value = $el.textContent;
 		if (onSelect) onSelect(value);
 		preventUpdate = false;
@@ -267,8 +270,11 @@ export default function inputhints($input, hints, onSelect) {
 	}
 
 	function updatePage() {
+		const offset = (pages + 1) * LIMIT;
+		const hasMore = offset < currentHints.length;
+
 		// if the scroll is at the bottom
-		if ($ul.scrollTop + $ul.clientHeight >= $ul.scrollHeight) {
+		if ($ul.scrollTop + $ul.clientHeight >= $ul.scrollHeight && hasMore) {
 			pages++;
 			updateUlNow(currentHints, pages);
 		}
@@ -304,14 +310,22 @@ export default function inputhints($input, hints, onSelect) {
 		const end = offset + LIMIT;
 		const list = hints.slice(offset, end);
 		let scrollTop = $ul.scrollTop;
-		if (!list.length) return;
+		//if (!list.length) return;
 
 		$ul.remove();
-		if (!page) {
-			scrollTop = 0;
-			$ul.content = list.map((hint) => <Hint hint={hint} />);
+
+		if (!hints.length) {
+			$ul.content = [<Hint hint={{ value: "", text: "No matches found" }} />];
+		} else if (!list.length) {
+			// No more hints to load
+			return;
 		} else {
-			$ul.append(...list.map((hint) => <Hint hint={hint} />));
+			if (!page) {
+				scrollTop = 0;
+				$ul.content = list.map((hint) => <Hint hint={hint} />);
+			} else {
+				$ul.append(...list.map((hint) => <Hint hint={hint} />));
+			}
 		}
 		app.append($ul);
 		$ul.scrollTop = scrollTop;

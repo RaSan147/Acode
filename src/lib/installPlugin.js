@@ -1,22 +1,42 @@
+import ajax from "@deadlyjack/ajax";
+import alert from "dialogs/alert";
+import confirm from "dialogs/confirm";
 import loader from "dialogs/loader";
 import fsOperation from "fileSystem";
+import purchaseListener from "handlers/purchase";
 import JSZip from "jszip";
 import Url from "utils/Url";
+import helpers from "utils/helpers";
 import constants from "./constants";
 import InstallState from "./installState";
 import loadPlugin from "./loadPlugin";
+
+/** @type {import("dialogs/loader").Loader} */
+let loaderDialog;
+/** @type {Array<() => Promise<void>>} */
+let depsLoaders;
 
 /**
  * Installs a plugin.
  * @param {string} id
  * @param {string} name
  * @param {string} purchaseToken
+ * @param {boolean} isDependency
  */
-export default async function installPlugin(id, name, purchaseToken) {
-	const title = name || "Plugin";
-	const loaderDialog = loader.create(title, strings.installing);
+export default async function installPlugin(
+	id,
+	name,
+	purchaseToken,
+	isDependency,
+) {
+	if (!isDependency) {
+		loaderDialog = loader.create(name || "Plugin", strings.installing);
+		depsLoaders = [];
+	}
+
 	let pluginDir;
 	let pluginUrl;
+	let state;
 
 	try {
 		if (!(await fsOperation(PLUGIN_DIR).exists())) {
@@ -42,7 +62,7 @@ export default async function installPlugin(id, name, purchaseToken) {
 	}
 
 	try {
-		loaderDialog.show();
+		if (!isDependency) loaderDialog.show();
 
 		const plugin = await fsOperation(pluginUrl).readFile(
 			undefined,
@@ -61,9 +81,38 @@ export default async function installPlugin(id, name, purchaseToken) {
 				throw new Error(strings["invalid plugin"]);
 			}
 
+			/** @type {{ dependencies: string[] }} */
 			const pluginJson = JSON.parse(
 				await zip.files["plugin.json"].async("text"),
 			);
+
+			if (!isDependency && pluginJson.dependencies) {
+				const manifests = await resolveDepsManifest(pluginJson.dependencies);
+
+				let titleText;
+				if (manifests.length > 1) {
+					titleText = "Acode wants to install the following dependencies:";
+				} else {
+					titleText = "Acode wants to install the following dependency:";
+				}
+
+				const shouldInstall = await confirm(
+					"Installer Notice",
+					titleText +
+						"<br /><br />" +
+						manifests.map((value) => value.name).join(", "),
+					true,
+				);
+
+				if (shouldInstall) {
+					for (const manifest of manifests) {
+						const hasError = await resolveDep(manifest);
+						if (hasError) throw new Error(strings.failed);
+					}
+				} else {
+					return;
+				}
+			}
 
 			if (!pluginDir) {
 				pluginJson.source = pluginUrl;
@@ -71,7 +120,7 @@ export default async function installPlugin(id, name, purchaseToken) {
 				pluginDir = Url.join(PLUGIN_DIR, id);
 			}
 
-			const state = await InstallState.new(id);
+			state = await InstallState.new(id);
 
 			if (!(await fsOperation(pluginDir).exists())) {
 				await fsOperation(PLUGIN_DIR).createDirectory(id);
@@ -109,19 +158,38 @@ export default async function installPlugin(id, name, purchaseToken) {
 
 			// Wait for all files to be processed
 			await Promise.allSettled(promises);
-			await loadPlugin(id, true);
+
+			if (isDependency) {
+				depsLoaders.push(async () => {
+					await loadPlugin(id, true);
+				});
+			} else {
+				for (const loader of depsLoaders) {
+					await loader();
+				}
+				await loadPlugin(id, true);
+			}
+
 			await state.save();
 			deleteRedundantFiles(pluginDir, state);
 		}
 	} catch (err) {
 		try {
-			await fsOperation(pluginDir).delete();
-		} catch (error) {
-			// ignore
+			// Clear the install state if installation fails
+			if (state) await state.clear();
+
+			// Delete the plugin directory if it was created
+			if (pluginDir && (await fsOperation(pluginDir).exists())) {
+				await fsOperation(pluginDir).delete();
+			}
+		} catch (cleanupError) {
+			console.error("Cleanup failed:", cleanupError);
 		}
 		throw err;
 	} finally {
-		loaderDialog.destroy();
+		if (!isDependency) {
+			loaderDialog.destroy();
+		}
 	}
 }
 
@@ -153,6 +221,112 @@ async function createFileRecursive(parent, dir) {
 		await createFileRecursive(newParent, dir);
 	}
 }
+
+/**
+ * Resolves Dependencies Manifest with given ids.
+ * @param {string[]} deps dependencies
+ */
+async function resolveDepsManifest(deps) {
+	const resolved = [];
+	for (const dependency of deps) {
+		const remoteDependency = await fsOperation(
+			constants.API_BASE,
+			`plugin/${dependency}`,
+		)
+			.readFile("json")
+			.catch(() => null);
+
+		if (!remoteDependency)
+			throw new Error(`Unknown plugin dependency: ${dependency}`);
+
+		const version = await getInstalledPluginVersion(remoteDependency.id);
+		if (remoteDependency?.version === version) continue;
+
+		if (remoteDependency.dependencies) {
+			const manifests = await resolveDepsManifest(
+				remoteDependency.dependencies,
+			);
+			resolved.push(manifests);
+		}
+
+		resolved.push(remoteDependency);
+	}
+
+	/**
+	 *
+	 * @param {string} id
+	 * @returns {Promise<string>} plugin version
+	 */
+	async function getInstalledPluginVersion(id) {
+		if (await fsOperation(PLUGIN_DIR, id).exists()) {
+			const plugin = await fsOperation(PLUGIN_DIR, id, "plugin.json").readFile(
+				"json",
+			);
+			return plugin.version;
+		}
+	}
+
+	return resolved;
+}
+
+/** Resolve dependency
+ * @param {object} manifest
+ * @returns {Promise<boolean>} has error
+ */
+async function resolveDep(manifest) {
+	let purchaseToken;
+	let product;
+	let isPaid = false;
+
+	isPaid = manifest.price > 0;
+	[product] = await helpers.promisify(iap.getProducts, [manifest.sku]);
+	if (product) {
+		const purchase = await getPurchase(product.productId);
+		purchaseToken = purchase?.purchaseToken;
+	}
+
+	if (isPaid && !purchaseToken) {
+		if (!product) throw new Error("Product not found");
+		const apiStatus = await helpers.checkAPIStatus();
+
+		if (!apiStatus) {
+			alert(strings.error, strings.api_error);
+			return true;
+		}
+
+		iap.setPurchaseUpdatedListener(...purchaseListener(onpurchase, onerror));
+		loaderDialog.setMessage(strings["loading..."]);
+		await helpers.promisify(iap.purchase, product.json);
+
+		async function onpurchase(e) {
+			const purchase = await getPurchase(product.productId);
+			await ajax.post(Url.join(constants.API_BASE, "plugin/order"), {
+				data: {
+					id: manifest.id,
+					token: purchase?.purchaseToken,
+					package: BuildInfo.packageName,
+				},
+			});
+			purchaseToken = purchase?.purchaseToken;
+		}
+
+		async function onerror(error) {
+			throw error;
+		}
+	}
+
+	loaderDialog.setMessage(
+		`${strings.installing.replace("...", "")} ${manifest.name}...`,
+	);
+	await installPlugin(manifest.id, undefined, purchaseToken, true);
+
+	async function getPurchase(sku) {
+		const purchases = await helpers.promisify(iap.getPurchases);
+		const purchase = purchases.find((p) => p.productIds.includes(sku));
+		return purchase;
+	}
+}
+
 /**
  *
  * @param {string} dir
@@ -174,7 +348,7 @@ async function listFileRecursive(dir, files) {
  * @param {Record<string, boolean>} files
  */
 async function deleteRedundantFiles(pluginDir, state) {
-	/** @type string[] */
+	/** @type {string[]} */
 	let files = [];
 	await listFileRecursive(pluginDir, files);
 

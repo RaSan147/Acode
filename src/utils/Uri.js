@@ -35,7 +35,7 @@ export default {
 				}
 			} else if (SINGLE_URI.test(contentUri)) {
 				const [provider, providerId] = SINGLE_URI.exec(contentUri);
-				docId = decodeURIComponent(contentUri); //DecodUri
+				docId = decodeURIComponent(contentUri); //DecodeUri
 				docId = docId.replace(provider, ""); //replace single to tree
 				docId = path.normalize(docId); //normalize docid
 
