@@ -49,13 +49,24 @@ jobs:
         run: yarn build android paid dev
 
       - name: Build Android prod aab
-        run: yarn build android paid prod
+        run: yarn build android paid prod bundle
+
+      - name: Move build artifacts to repo root
+        run: |
+          test -f platforms/android/app/build/outputs/apk/debug/app-debug.apk || { echo "ERROR: debug APK not found"; exit 1; }
+          test -f platforms/android/app/build/outputs/bundle/release/app-release.aab || { echo "ERROR: release AAB not found"; exit 1; }
+          mv platforms/android/app/build/outputs/apk/debug/app-debug.apk ./Acode-dev.apk
+          mv platforms/android/app/build/outputs/bundle/release/app-release.aab ./Acode-prod.aab
 
       - name: Make sign.sh executable
         run: chmod +x ./sign.sh
 
       - name: Convert signed AAB -> universal APK
         run: ./sign.sh
+
+      - name: Remove decoded keystore
+        if: always()
+        run: rm -f acode.jks || true
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4

@@ -42,3 +42,6 @@ for aab in ./*.aab; do
   unzip -o "$out" universal.apk
   mv -v universal.apk "${aab%.*}.apk"
 done
+
+# Remove decoded keystore
+rm -f "$KEYSTORE_FILE"
