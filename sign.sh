@@ -58,7 +58,7 @@ else
     -keystore "$KEYSTORE_FILE" \
     -alias "$KS_ALIAS" \
     -keyalg RSA \
-    -keysize 4096 \
+    -keysize 2048 \
     -validity 9125 \
     -dname "CN=Acode CI Build, OU=CI, O=Acode, L=Unknown, ST=Unknown, C=US" \
     -storepass "$KS_PASS" \
