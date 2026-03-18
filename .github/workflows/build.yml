@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
+      # Optional: set these repository secrets for stable, update-compatible signing.
+      # If not set, sign.sh will generate an ephemeral key (APKs cannot update existing installs).
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -61,10 +63,10 @@ jobs:
       - name: Make sign.sh executable
         run: chmod +x ./sign.sh
 
-      - name: Convert signed AAB -> universal APK
+      - name: Sign AAB -> universal APK (stored key or ephemeral fallback)
         run: ./sign.sh
 
-      - name: Remove decoded keystore
+      - name: Remove decoded keystore (safety net if sign.sh aborted early)
         if: always()
         run: rm -f acode.jks || true
 
