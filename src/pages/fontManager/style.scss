@@ -112,19 +112,46 @@ wc-page.font-manager-page {
 		font-weight: 700;
 	}
 
-	@media screen and (min-width: 768px) {
+  @supports not (gap: 1px) {
+    .font-manager-list > .list-item {
+      > * + * { margin-left: 0.85rem; }
+      > .container > * + * { margin-top: 0.24rem; }
+      > .setting-tail > * + * { margin-left: 0.65rem; }
+    }
+  }
+
+  @media screen and (min-width: 768px) {
 		.font-manager-list {
 			padding-left: 0.5rem;
 			padding-right: 0.5rem;
 		}
 	}
 
-	.font-manager-current {
+	.font-manager-badge {
 		display: inline-flex;
 		align-items: center;
+		justify-content: center;
+		padding: 0.16rem 0.48rem;
+		border-radius: 999px;
 		font-size: 0.82rem;
 		font-weight: 600;
 		line-height: 1.2;
+		background: color-mix(in srgb, var(--secondary-color), var(--active-color) 10%);
+		color: color-mix(in srgb, var(--active-color), transparent 12%);
+	}
+
+	.font-manager-badge-editor {
+		background: color-mix(in srgb, var(--secondary-color), #4ca3ff 14%);
+		color: color-mix(in srgb, #4ca3ff, white 4%);
+	}
+
+	.font-manager-badge-terminal {
+		background: color-mix(in srgb, var(--secondary-color), #21b36b 14%);
+		color: color-mix(in srgb, #21b36b, white 4%);
+	}
+
+	.font-manager-badge-app {
+		background: color-mix(in srgb, var(--secondary-color), var(--active-color) 12%);
 		color: color-mix(in srgb, var(--active-color), transparent 14%);
 	}
 

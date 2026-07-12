@@ -4,7 +4,7 @@ import themes from "theme/list";
 import { getSystemEditorTheme } from "theme/preInstalled";
 import helpers from "utils/helpers";
 import Url from "utils/Url";
-import constants from "./constants";
+import config from "./config";
 import lang from "./lang";
 import { isDeviceDarkTheme } from "./systemConfiguration";
 
@@ -26,6 +26,10 @@ class Settings {
 	#defaultSettings;
 	#oldSettings;
 	#initialized = false;
+	#uiZoomBaseFontSize = {
+		root: null,
+		body: null,
+	};
 	#on = {
 		update: [],
 		"update:after": [],
@@ -39,6 +43,7 @@ class Settings {
 	#fileBrowserSettings = {
 		showHiddenFiles: false,
 		sortByName: true,
+		listFiles: true,
 	};
 	#excludeFolders = [
 		"**/node_modules/**",
@@ -75,12 +80,12 @@ class Settings {
 		"**/temp/**",
 		"**/tmp/**",
 		"**/.cache/**",
+		"**/.gradle/**",
 		"**/logs/**",
 		"**/.sass-cache/**",
 		"**/.DS_Store/**",
 		"**/Thumbs.db/**",
 	];
-	#IS_TABLET = innerWidth > 768;
 
 	QUICKTOOLS_ROWS = 2;
 	QUICKTOOLS_GROUP_CAPACITY = 8;
@@ -115,8 +120,8 @@ class Settings {
 			formatter: {},
 			prettier: {},
 			maxFileSize: 12,
-			serverPort: constants.SERVER_PORT,
-			previewPort: constants.PREVIEW_PORT,
+			serverPort: config.SERVER_PORT,
+			previewPort: config.PREVIEW_PORT,
 			showConsoleToggler: true,
 			previewMode: this.PREVIEW_MODE_INAPP,
 			disableCache: false,
@@ -124,7 +129,9 @@ class Settings {
 			host: "localhost",
 			search: this.#searchSettings,
 			lang: "en-us",
+			uiZoom: 100,
 			fontSize: "12px",
+			cursorWidth: 2,
 			editorTheme: "one_dark",
 			textWrap: true,
 			softTab: true,
@@ -135,16 +142,30 @@ class Settings {
 			fadeFoldWidgets: false,
 			autoCorrect: true,
 			openFileListPos: this.OPEN_FILE_LIST_POS_HEADER,
-			quickTools: this.#IS_TABLET ? 0 : 1,
+			quickTools: 2,
 			quickToolsTriggerMode: this.QUICKTOOLS_TRIGGER_MODE_TOUCH,
+			appFont: "",
 			editorFont: "Roboto Mono",
 			vibrateOnTap: true,
 			fullscreen: false,
-			floatingButton: !this.#IS_TABLET,
+			floatingButton: false,
 			liveAutoCompletion: true,
+			localWordCompletion: true,
+			languageCompletion: true,
+			recommendExtensions: true,
+			useEmmet: true,
+			autoIndent: true,
+			codeFolding: true,
+			autoCloseBrackets: true,
+			bracketMatching: true,
+			highlightActiveLine: true,
+			highlightSelectionMatches: false,
+			autoCloseTags: true,
+			autoRenameTags: true,
 			showPrintMargin: false,
 			printMargin: 80,
 			scrollbarSize: 20,
+			scrollbarHeight: 50,
 			showSpaces: false,
 			confirmOnExit: true,
 			lineHeight: 2,
@@ -158,9 +179,8 @@ class Settings {
 			rememberFolders: true,
 			diagonalScrolling: false,
 			reverseScrolling: false,
-			teardropTimeout: 3000,
-			teardropSize: 30,
-			scrollSpeed: constants.SCROLL_SPEED_NORMAL,
+			scrollSpeed: config.SCROLL_SPEED_NORMAL,
+			scrollPastEnd: "medium",
 			customTheme: this.#customTheme,
 			relativeLineNumbers: false,
 			elasticTabstops: false,
@@ -168,7 +188,10 @@ class Settings {
 			hardWrap: false,
 			useTextareaForIME: false,
 			touchMoveThreshold: Math.round((1 / devicePixelRatio) * 10) / 20,
-			quicktoolsItems: [...Array(this.#QUICKTOOLS_SIZE).keys()],
+			quicktoolsItems: [
+				2, 1, 5, 3, 4, 18, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 33, 21, 20,
+				16, 19, 17, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+			],
 			excludeFolders: this.#excludeFolders,
 			defaultFileEncoding: "UTF-8",
 			inlineAutoCompletion: true,
@@ -179,13 +202,21 @@ class Settings {
 			showSponsorSidebarApp: true,
 			showAnnotations: false,
 			lintGutter: true,
+			indentGuides: false,
 			rainbowBrackets: true,
 			pluginsDisabled: {}, // pluginId: true/false
 			lsp: {
 				servers: {},
+				allowNonTerminalWorkspace: false,
+				runtime: {
+					default: "auto",
+					servers: {},
+					workspaces: {},
+				},
 			},
 			developerMode: false,
-			shiftClickSelection: false,
+			shiftClickSelection: true,
+			showShareButton: true,
 		};
 		this.value = structuredClone(this.#defaultSettings);
 	}
@@ -242,16 +273,21 @@ class Settings {
 	}
 
 	async #save() {
-		const fs = fsOperation(this.settingsFile);
-		const settingsText = JSON.stringify(this.value, undefined, 4);
+		try {
+			const fs = fsOperation(this.settingsFile);
+			const settingsText = JSON.stringify(this.value, undefined, 4);
 
-		if (!(await fs.exists())) {
-			const dirFs = fsOperation(DATA_STORAGE);
-			await dirFs.createFile("settings.json");
+			if (!(await fs.exists())) {
+				const dirFs = fsOperation(DATA_STORAGE);
+				await dirFs.createFile("settings.json");
+			}
+
+			await fs.writeFile(settingsText);
+			this.#oldSettings = structuredClone(this.value);
+		} catch (error) {
+			toast(strings["settings save failed"] || "Settings save failed");
+			console.error("Settings save failed:", error);
 		}
-
-		await fs.writeFile(settingsText);
-		this.#oldSettings = structuredClone(this.value);
 	}
 
 	/**
@@ -288,7 +324,6 @@ class Settings {
 		});
 
 		if (saveFile) await this.#save();
-		if (showToast) toast(strings["settings saved"]);
 
 		changedSettings.forEach((setting) => {
 			const listeners = this.#on[`update:${setting}:after`];
@@ -369,6 +404,10 @@ class Settings {
 				this.applyAnimationSetting();
 				break;
 
+			case "uiZoom":
+				this.applyUiZoomSetting();
+				break;
+
 			case "lang":
 				this.applyLangSetting();
 				break;
@@ -392,6 +431,40 @@ class Settings {
 			app.classList.remove("no-animation");
 		} else if (value === "no") {
 			app.classList.add("no-animation");
+		}
+	}
+
+	applyUiZoomSetting() {
+		const zoom = Number(this.value.uiZoom) || 100;
+		const clamped = Math.min(160, Math.max(70, zoom));
+		if (clamped === 100) {
+			document.documentElement.style.fontSize = "";
+			document.body.style.fontSize = "";
+			if (window.root) {
+				window.root.style.zoom = "";
+				window.root.style.width = "";
+				window.root.style.height = "";
+			}
+			return;
+		}
+
+		const rootFontSize =
+			this.#uiZoomBaseFontSize.root ||
+			Number.parseFloat(getComputedStyle(document.documentElement).fontSize) ||
+			14;
+		const bodyFontSize =
+			this.#uiZoomBaseFontSize.body ||
+			Number.parseFloat(getComputedStyle(document.body).fontSize) ||
+			rootFontSize;
+
+		this.#uiZoomBaseFontSize.root = rootFontSize;
+		this.#uiZoomBaseFontSize.body = bodyFontSize;
+		document.documentElement.style.fontSize = `${(rootFontSize * clamped) / 100}px`;
+		document.body.style.fontSize = `${(bodyFontSize * clamped) / 100}px`;
+		if (window.root) {
+			window.root.style.zoom = "";
+			window.root.style.width = "";
+			window.root.style.height = "";
 		}
 	}
 

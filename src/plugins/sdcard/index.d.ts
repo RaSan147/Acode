@@ -39,6 +39,30 @@ interface DocumentFile {
   uri: string;
 }
 
+interface WorkspaceFileEntry {
+  rootUrl: string;
+  parent: string;
+  parentUrl: string;
+  name: string;
+  path: string;
+  url: string;
+  uri: string;
+  mime?: string;
+  type?: string;
+  isDirectory: boolean;
+  isFile: boolean;
+  size: number;
+  modifiedDate: number;
+}
+
+type WorkspaceEvent =
+  | { id: string; type: 'status'; action: 'status'; state: string; message: string; progress: number }
+  | { id: string; type: 'batch'; action: 'batch'; entries: WorkspaceFileEntry[] }
+  | { id: string; type: 'search-result'; action: 'search-result'; data: any }
+  | { id: string; type: 'replace-result'; action: 'replace-result'; file: WorkspaceFileEntry; text: string }
+  | { id: string; type: 'progress'; action: 'progress'; data: number }
+  | { id: string; type: 'done' | 'done-searching' | 'done-replacing' | 'error'; action: string; [key: string]: any };
+
 interface SDcard {
   /**
    * Copy file/directory to given destination
@@ -183,12 +207,14 @@ interface SDcard {
   ): void;
   /**
    * Opens gallery to select image
-   * @param onSuccess Callback function on success returns url of selected file
+   * Returns a temporary URI grant for the selected image.
+   * Use read/stats on the returned URI if you need to inspect or preview it.
+   * @param onSuccess Callback function on success returns URI of selected image
    * @param onFail Callback function on error returns error object
    * @param mimeType MimeType of file to be selected
    */
   getImage(
-    onSuccess: (url: DocumentFile) => void,
+    onSuccess: (url: string) => void,
     onFail: (err: any) => void,
     mimeType: string,
   ): void;
@@ -255,6 +281,31 @@ interface SDcard {
   ): {
     unwatch: () => void;
   };
+  workspaceScan(
+    options: any,
+    onEvent: (event: WorkspaceEvent) => void,
+    onFail: (err: any) => void,
+  ): void;
+  workspaceSearch(
+    options: any,
+    onEvent: (event: WorkspaceEvent) => void,
+    onFail: (err: any) => void,
+  ): void;
+  workspaceCancel(
+    id: string,
+    onSuccess?: (res: 'OK') => void,
+    onFail?: (err: any) => void,
+  ): void;
+  workspaceMarkDirty(
+    urls: string[],
+    onSuccess?: (res: 'OK') => void,
+    onFail?: (err: any) => void,
+  ): void;
+  workspaceClear(
+    roots: string[],
+    onSuccess?: (res: 'OK') => void,
+    onFail?: (err: any) => void,
+  ): void;
 }
 
 declare var sdcard: SDcard;

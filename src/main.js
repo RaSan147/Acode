@@ -6,15 +6,18 @@ import "res/icons/style.css";
 import "res/file-icons/style.css";
 import "styles/overrideAceStyle.scss";
 import "styles/wideScreen.scss";
+// Editor tabs use a shadow root that only links build/main.css.
+import "pages/welcome/welcome.scss";
 
 import "lib/polyfill";
 import "cm/supportedModes";
 import "components/WebComponents";
+import "handlers/editorWorkaround";
 
 import fsOperation from "fileSystem";
 import sidebarApps from "sidebarApps";
-import ajax from "@deadlyjack/ajax";
 import { setKeyBindings } from "cm/commandRegistry";
+import { hasConnectedServers } from "cm/lsp/connectionState";
 import {
 	getModeForPath,
 	getModes,
@@ -22,130 +25,76 @@ import {
 	initModes,
 } from "cm/modelist";
 import Contextmenu from "components/contextmenu";
-import { hasConnectedServers } from "components/lspInfoDialog";
 import Sidebar from "components/sidebar";
-import { TerminalManager } from "components/terminal";
 import tile from "components/tile";
 import toast from "components/toast";
-import tutorial from "components/tutorial";
 import confirm from "dialogs/confirm";
 import intentHandler, { processPendingIntents } from "handlers/intent";
 import keyboardHandler, { keydownState } from "handlers/keyboard";
 import quickToolsInit from "handlers/quickToolsInit";
 import windowResize from "handlers/windowResize";
-import Acode from "lib/acode";
+import acode from "lib/acode";
 import actionStack from "lib/actionStack";
 import adRewards from "lib/adRewards";
+import ajax from "lib/ajax";
 import applySettings from "lib/applySettings";
 import checkFiles from "lib/checkFiles";
-import checkPluginsUpdate from "lib/checkPluginsUpdate";
+import { canSaveFile } from "lib/commands";
+import config from "lib/config";
 import EditorFile from "lib/editorFile";
 import EditorManager from "lib/editorManager";
 import { initFileList } from "lib/fileList";
+import fonts from "lib/fonts";
 import lang from "lib/lang";
 import loadPlugins from "lib/loadPlugins";
 import Logger from "lib/logger";
-import NotificationManager from "lib/notificationManager";
+import notificationManager from "lib/notificationManager";
 import openFolder, { addedFolder } from "lib/openFolder";
-import { registerPrettierFormatter } from "lib/prettierFormatter";
+import { registerPrettierFormatter } from "lib/registerPrettierFormatter";
 import restoreFiles from "lib/restoreFiles";
 import settings from "lib/settings";
-import startAd from "lib/startAd";
+import startAd, { hideAd } from "lib/startAd";
 import mustache from "mustache";
-import plugins from "pages/plugins";
-import openWelcomeTab from "pages/welcome";
-import otherSettings from "settings/appSettings";
 import themes from "theme/list";
 import { initHighlighting } from "utils/codeHighlight";
 import { getEncoding, initEncodings } from "utils/encodings";
 import helpers from "utils/helpers";
+import { INSTALL_SOURCE_PLAY, isPlayStoreInstall } from "utils/installSource";
 import loadPolyFill from "utils/polyfill";
 import Url from "utils/Url";
 import $_fileMenu from "views/file-menu.hbs";
 import $_menu from "views/menu.hbs";
 import auth, { loginEvents } from "./lib/auth";
 
+const oldPreventDefault = TouchEvent.prototype.preventDefault;
 const previousVersionCode = Number.parseInt(localStorage.versionCode, 10);
-
-window.onload = Main;
 const logger = new Logger();
 
-function createAceModelistCompatModule() {
-	const toAceMode = (mode) => {
-		const resolved = mode || getModeForPath("");
-		if (!resolved) return null;
-		const name = resolved.name || "text";
-		const rawMode = String(resolved.mode || name);
-		const modePath = rawMode.startsWith("ace/mode/")
-			? rawMode
-			: `ace/mode/${rawMode}`;
-		return {
-			...resolved,
-			name,
-			caption: resolved.caption || name,
-			mode: modePath,
-		};
-	};
+ajax.response = (xhr) => {
+	return xhr.response;
+};
 
-	return {
-		get modes() {
-			return getModes()
-				.map((mode) => toAceMode(mode))
-				.filter(Boolean);
-		},
-		get modesByName() {
-			const source = getModesByName();
-			const result = {};
-			Object.keys(source).forEach((name) => {
-				result[name] = toAceMode(source[name]);
-			});
-			return result;
-		},
-		getModeForPath(path) {
-			return toAceMode(getModeForPath(String(path || "")));
-		},
-	};
-}
+ajax.configure = (xhr, url) => {
+	if (url.includes("acode.app/api")) {
+		xhr.withCredentials = true;
+	}
+};
 
-function ensureAceCompatApi() {
-	const ace = window.ace || {};
-	const modelistModule = createAceModelistCompatModule();
-	const originalRequire =
-		typeof ace.require === "function" ? ace.require.bind(ace) : null;
+TouchEvent.prototype.preventDefault = function () {
+	if (this.cancelable) {
+		oldPreventDefault.bind(this)();
+	}
+};
 
-	ace.require = (moduleId) => {
-		if (moduleId === "ace/ext/modelist" || moduleId === "ace/ext/modelist.js") {
-			return modelistModule;
-		}
-		return originalRequire?.(moduleId);
-	};
-
-	window.ace = ace;
-}
-
-async function Main() {
-	const oldPreventDefault = TouchEvent.prototype.preventDefault;
-
-	ajax.response = (xhr) => {
-		return xhr.response;
-	};
-
-	loadPolyFill.apply(window);
-
-	TouchEvent.prototype.preventDefault = function () {
-		if (this.cancelable) {
-			oldPreventDefault.bind(this)();
-		}
-	};
-
-	window.addEventListener("resize", windowResize);
-	document.addEventListener("pause", pauseHandler);
-	document.addEventListener("resume", resumeHandler);
-	document.addEventListener("keydown", keyboardHandler);
-	document.addEventListener("deviceready", onDeviceReady);
-	document.addEventListener("backbutton", backButtonHandler);
-	document.addEventListener("menubutton", menuButtonHandler);
-}
+loadPolyFill.apply(window);
+loginEvents.addListener(onLogin);
+window.addEventListener("resize", windowResize);
+document.addEventListener("pause", pauseHandler);
+document.addEventListener("resume", resumeHandler);
+document.addEventListener("keydown", keyboardHandler);
+document.addEventListener("deviceready", onDeviceReady);
+document.addEventListener("backbutton", backButtonHandler);
+document.addEventListener("menubutton", menuButtonHandler);
 
 async function onDeviceReady() {
 	await initEncodings(); // important to load encodings before anything else
@@ -169,8 +118,9 @@ async function onDeviceReady() {
 	window.CACHE_STORAGE = externalCacheDirectory || cacheDirectory;
 	window.PLUGIN_DIR = Url.join(DATA_STORAGE, "plugins");
 	window.KEYBINDING_FILE = Url.join(DATA_STORAGE, ".key-bindings.json");
-	window.IS_FREE_VERSION = isFreePackage;
 	window.log = logger.log.bind(logger);
+
+	config.HAS_PRO = !isFreePackage;
 
 	// Capture synchronous errors
 	window.addEventListener("error", (event) => {
@@ -185,7 +135,24 @@ async function onDeviceReady() {
 		);
 	});
 
-	startAd();
+	let installSource = INSTALL_SOURCE_PLAY;
+
+	try {
+		installSource = await helpers.promisify(system.getInstaller);
+	} catch (error) {
+		console.error(error);
+	}
+
+	Object.defineProperty(window, "appInstallSource", {
+		get() {
+			return installSource;
+		},
+		set() {
+			console.warn("appInstallSource is readonly");
+		},
+		configurable: false,
+		enumerable: false,
+	});
 
 	try {
 		await helpers.promisify(iap.startConnection).catch((e) => {
@@ -194,7 +161,7 @@ async function onDeviceReady() {
 		});
 
 		if (localStorage.acode_pro === "true") {
-			window.IS_FREE_VERSION = false;
+			config.HAS_PRO = true;
 		}
 
 		if (navigator.onLine) {
@@ -203,9 +170,9 @@ async function onDeviceReady() {
 				p.productIds.includes("acode_pro_new"),
 			);
 			if (isPro) {
-				window.IS_FREE_VERSION = false;
+				config.HAS_PRO = true;
 			} else {
-				window.IS_FREE_VERSION = isFreePackage;
+				config.HAS_PRO = !isFreePackage;
 			}
 		}
 	} catch (error) {
@@ -237,7 +204,7 @@ async function onDeviceReady() {
 		if (client.height === 0) return false;
 		return true;
 	})();
-	window.acode = new Acode();
+	window.acode = acode;
 	await adRewards.init();
 	ensureAceCompatApi();
 
@@ -247,7 +214,11 @@ async function onDeviceReady() {
 
 	const { versionCode } = BuildInfo;
 
-	if (previousVersionCode !== versionCode) {
+	if (
+		previousVersionCode != null &&
+		!Number.isNaN(previousVersionCode) &&
+		previousVersionCode !== versionCode
+	) {
 		system.clearCache();
 	}
 
@@ -284,6 +255,9 @@ async function onDeviceReady() {
 	themes.init();
 	initHighlighting();
 
+	// Inject default terminal font face early so browser preloads it
+	fonts.injectFontFace("MesloLGS NF Regular");
+
 	registerPrettierFormatter();
 
 	acode.setLoadingMessage("Loading language...");
@@ -317,6 +291,12 @@ async function onDeviceReady() {
 
 				// Re-emit events for active file after plugins are loaded
 				const { activeFile } = editorManager;
+				for (const file of editorManager.files) {
+					if (file?.type === "editor") {
+						file.setMode();
+					}
+				}
+				editorManager.reapplyActiveFile();
 				if (activeFile?.uri) {
 					// Re-emit file-loaded event
 					editorManager.emit("file-loaded", activeFile);
@@ -332,21 +312,30 @@ async function onDeviceReady() {
 
 			// Check login status before emitting events
 			try {
-				const isLoggedIn = await auth.isLoggedIn();
-				if (isLoggedIn) {
+				const user = await auth.getLoggedInUser();
+				if (user) {
+					if (Boolean(user.acode_pro)) {
+						config.HAS_PRO = true;
+					}
 					loginEvents.emit();
 				}
 			} catch (error) {
 				console.error("Error checking login status:", error);
-				toast("Error checking login status");
 			}
+
+			fetchPromotions();
+			startAd();
 		}, 500);
 	}
 
 	await promptUpdateCheckConsent();
 
 	// Check for app updates
-	if (settings.value.checkForAppUpdates && navigator.onLine) {
+	if (
+		!isPlayStoreInstall() &&
+		settings.value.checkForAppUpdates &&
+		navigator.onLine
+	) {
 		cordova.plugin.http.sendRequest(
 			"https://api.github.com/repos/Acode-Foundation/Acode/releases/latest",
 			{
@@ -356,20 +345,42 @@ async function onDeviceReady() {
 			(response) => {
 				const release = response.data;
 				// assuming version is in format v1.2.3
+				const versionFormat = /^v?(\d+(?:\.\d+)*)/;
 				const latestVersion = release.tag_name
-					.replace("v", "")
+					.match(versionFormat)?.[1]
 					.split(".")
 					.map(Number);
-				const currentVersion = BuildInfo.version.split(".").map(Number);
+				const currentVersion = BuildInfo.version
+					.match(versionFormat)?.[1]
+					.split(".")
+					.map(Number);
+				if (!(latestVersion && currentVersion)) {
+					window.log(
+						"error",
+						"Failed to parse version while checking for updates.",
+					);
+					return;
+				}
 
-				const hasUpdate = latestVersion.some(
-					(num, i) => num > currentVersion[i],
-				);
+				let hasUpdate = false;
+				for (let i = 0; i < latestVersion.length; i++) {
+					const latest = latestVersion[i];
+					const current = currentVersion[i] || 0;
+					if (latest > current) {
+						hasUpdate = true;
+						break;
+					} else if (latest < current) {
+						break;
+					}
+				}
 
 				if (hasUpdate) {
 					acode.pushNotification(
-						"Update Available",
-						`Acode ${release.tag_name} is now available! Click here to checkout.`,
+						strings["update available"],
+						strings["update available info"].replace(
+							/\{version\}/,
+							release.tag_name,
+						),
 						{
 							icon: "update",
 							type: "warning",
@@ -386,21 +397,56 @@ async function onDeviceReady() {
 			},
 		);
 	}
+	const { default: checkPluginsUpdate } = await import(
+		/* webpackChunkName: "checkPluginsUpdate" */ "lib/checkPluginsUpdate"
+	);
 	checkPluginsUpdate()
 		.then((updates) => {
 			if (!updates.length) return;
 			acode.pushNotification(
-				"Plugin Updates",
-				`${updates.length} plugin${updates.length > 1 ? "s" : ""} ${updates.length > 1 ? "have" : "has"} new version${updates.length > 1 ? "s" : ""} available.`,
+				strings["plugin updates"],
+				getUpdateMessage(updates.length),
 				{
 					icon: "extension",
-					action: () => {
+					action: async () => {
+						const { default: plugins } = await import(
+							/* webpackChunkName: "plugins" */ "pages/plugins"
+						);
 						plugins(updates);
 					},
 				},
 			);
 		})
 		.catch(console.error);
+}
+
+async function onLogin() {
+	try {
+		const user = await auth.getLoggedInUser();
+		if (!user) return;
+		if (Boolean(user.acode_pro)) {
+			config.HAS_PRO = true;
+		}
+		if (config.HAS_PRO) {
+			hideAd(true);
+		}
+	} catch (error) {
+		console.error(error);
+	}
+}
+
+async function fetchPromotions() {
+	try {
+		const res = await fetch(`${config.API_BASE}/promotions`);
+		if (res.ok) {
+			const data = await res.json();
+			if (Array.isArray(data)) {
+				localStorage.setItem("cached_promotions", JSON.stringify(data));
+			}
+		}
+	} catch (err) {
+		console.debug("Failed to fetch promotions:", err);
+	}
 }
 
 async function setDebugInfo() {
@@ -416,19 +462,41 @@ async function setDebugInfo() {
 	// Extract Chrome/WebView version
 	const chromeMatch = userAgent.match(/Chrome\/([0-9.]+)/);
 	const webviewVersion = chromeMatch ? chromeMatch[1] : "Unknown";
+	const webviewMajor = Number.parseInt(webviewVersion, 10);
+	const minWebviewMajor = window.__ACODE_MIN_WEBVIEW_MAJOR__ || 84;
+	const webviewStatus =
+		Number.isFinite(webviewMajor) && webviewMajor < minWebviewMajor
+			? ` (minimum supported: ${minWebviewMajor})`
+			: "";
 
 	const info = [
 		`App: v${version} (${versionCode})`,
 		`Android: ${androidVersion}`,
-		`WebView: ${webviewVersion}`,
+		`WebView: ${webviewVersion}${webviewStatus}`,
 		`Language: ${language}`,
 	].join("\n");
 
 	document.body.setAttribute("data-version", info);
 }
 
+function getUpdateMessage(count) {
+	return count === 1
+		? strings["plugin updates singular"]
+		: strings["plugin updates plural"].replace(/\{count\}/, count);
+}
+
 async function promptUpdateCheckConsent() {
 	try {
+		if (isPlayStoreInstall()) {
+			localStorage.setItem("checkForUpdatesPrompted", "true");
+
+			if (settings.value.checkForAppUpdates) {
+				await settings.update({ checkForAppUpdates: false }, false);
+			}
+
+			return;
+		}
+
 		if (Boolean(localStorage.getItem("checkForUpdatesPrompted"))) return;
 
 		if (settings.value.checkForAppUpdates) {
@@ -438,6 +506,7 @@ async function promptUpdateCheckConsent() {
 
 		const message = strings["prompt update check consent message"];
 		const shouldEnable = await confirm(strings?.confirm, message);
+
 		localStorage.setItem("checkForUpdatesPrompted", "true");
 		if (shouldEnable) {
 			await settings.update({ checkForAppUpdates: true }, false);
@@ -573,17 +642,14 @@ async function loadApp() {
 	});
 	//#endregion
 
-	const notificationManager = new NotificationManager();
 	notificationManager.init();
-
 	window.log("info", "Started app and its services...");
 
-	// Show welcome tab on first launch, otherwise create default file
-	const isFirstLaunch = Number.isNaN(previousVersionCode);
-	if (isFirstLaunch) {
+	if (!files.length) {
+		const { default: openWelcomeTab } = await import(
+			/* webpackChunkName: "welcome" */ "pages/welcome"
+		);
 		openWelcomeTab();
-	} else {
-		new EditorFile();
 	}
 
 	// load theme plugins
@@ -606,15 +672,17 @@ async function loadApp() {
 	if (Array.isArray(files) && files.length) {
 		try {
 			await restoreFiles(files);
-			// save state to handle file loading gracefully
-			sessionStorage.setItem("isfilesRestored", true);
-			// Process any pending intents that were queued before files were restored
-			await processPendingIntents();
 		} catch (error) {
 			window.log("error", "File loading failed!");
 			window.log("error", error);
 			toast("File loading failed!");
+		} finally {
+			// Mark restoration complete even after a partial failure so
+			// switch-file persistence and queued intents are not blocked.
+			sessionStorage.setItem("isfilesRestored", true);
 		}
+		// Process any pending intents that were queued before files were restored
+		await processPendingIntents();
 	} else {
 		// Even when no files need to be restored, mark as restored and process pending intents
 		sessionStorage.setItem("isfilesRestored", true);
@@ -622,11 +690,19 @@ async function loadApp() {
 		onEditorUpdate(undefined, false);
 	}
 
+	acode.exec("save-state");
 	initFileList();
 
-	TerminalManager.restorePersistedSessions().catch((error) => {
-		console.error("Terminal restoration failed:", error);
-	});
+	import(/* webpackChunkName: "terminal" */ "components/terminal").then(
+		({ TerminalManager }) => {
+			TerminalManager.restorePersistedSessions().catch((error) => {
+				console.error("Terminal restoration failed:", error);
+			});
+		},
+		(error) => {
+			console.error("Failed to load terminal module:", error);
+		},
+	);
 
 	/**
 	 *
@@ -649,22 +725,31 @@ async function loadApp() {
 		// if (!$editMenuToggler.isConnected) {
 		// 	$header.insertBefore($editMenuToggler, $header.lastChild);
 		// }
-		if (activeFile?.type === "page" || activeFile?.type === "terminal") {
-			$editMenuToggler.remove();
-		} else {
+		if (
+			activeFile &&
+			activeFile.type !== "page" &&
+			activeFile.type !== "terminal"
+		) {
 			if (!$editMenuToggler.isConnected) {
 				$header.insertBefore($editMenuToggler, $header.lastChild);
 			}
+		} else {
+			$editMenuToggler.remove();
 		}
 
 		if (mode === "switch-file") {
 			if (settings.value.rememberFiles && activeFile) {
 				localStorage.setItem("lastfile", activeFile.id);
 			}
+			if (saveState && sessionStorage.getItem("isfilesRestored") === "true") {
+				acode.exec("save-state");
+			}
 			return;
 		}
 
-		if (saveState) acode.exec("save-state");
+		if (saveState && sessionStorage.getItem("isfilesRestored") === "true") {
+			acode.exec("save-state");
+		}
 	}
 
 	async function onFileUpdate() {
@@ -727,7 +812,12 @@ function createMainMenu({ top, bottom, toggler }) {
 		toggler,
 		transformOrigin: top ? "top right" : "bottom right",
 		innerHTML: () => {
-			return mustache.render($_menu, strings);
+			return mustache.render($_menu, {
+				...strings,
+				"running processes":
+					strings["running processes"] || "Running processes",
+				can_save_file: canSaveFile(window.editorManager?.activeFile),
+			});
 		},
 	});
 }
@@ -739,9 +829,9 @@ function createFileMenu({ top, bottom, toggler }) {
 		toggler,
 		transformOrigin: top ? "top right" : "bottom right",
 		innerHTML: () => {
-			const file = window.editorManager.activeFile;
+			const file = window.editorManager?.activeFile;
 
-			if (file.type === "page") {
+			if (!file || file.type === "page" || file.type === "terminal") {
 				return "";
 			}
 
@@ -757,6 +847,15 @@ function createFileMenu({ top, bottom, toggler }) {
 			const hasSelection = !!cmEditor && !cmEditor.state.selection.main.empty;
 			return mustache.render($_fileMenu, {
 				...strings,
+				file_id: file.id,
+				toggle_pin_tab_text: file.pinned
+					? strings["unpin tab"] || "Unpin tab"
+					: strings["pin tab"] || "Pin tab",
+				toggle_pin_tab_icon: file.pinned ? "icon pin-off" : "icon pin",
+				close_tabs_to_right_text:
+					strings["close tabs to right"] || "Close Right",
+				close_tabs_to_left_text: strings["close tabs to left"] || "Close Left",
+				close_other_tabs_text: strings["close other tabs"] || "Close Others",
 				// Use CodeMirror mode stored on EditorFile (set in setMode)
 				file_mode: isEditorFile ? file.currentMode || "" : "",
 				file_encoding: isEditorFile ? encoding : "",
@@ -773,8 +872,13 @@ function createFileMenu({ top, bottom, toggler }) {
 	return $menu;
 }
 
-function showTutorials() {
+async function showTutorials() {
 	if (window.innerWidth > 750) {
+		const [{ default: tutorial }, { default: otherSettings }] =
+			await Promise.all([
+				import(/* webpackChunkName: "tutorial" */ "components/tutorial"),
+				import(/* webpackChunkName: "appSettings" */ "settings/appSettings"),
+			]);
 		tutorial("quicktools-tutorials", (hide) => {
 			const onclick = () => {
 				otherSettings();
@@ -810,8 +914,9 @@ function menuButtonHandler() {
 	acode?.exec("toggle-sidebar");
 }
 
-function pauseHandler() {
+async function pauseHandler() {
 	const { acode } = window;
+	await window.editorManager?.flushCacheWrites?.();
 	acode?.exec("save-state");
 }
 
@@ -819,4 +924,57 @@ function resumeHandler() {
 	adRewards.handleResume();
 	if (!settings.value.checkFiles) return;
 	checkFiles();
+}
+
+function createAceModelistCompatModule() {
+	const toAceMode = (mode) => {
+		const resolved = mode || getModeForPath("");
+		if (!resolved) return null;
+		const name = resolved.name || "text";
+		const rawMode = String(resolved.mode || name);
+		const modePath = rawMode.startsWith("ace/mode/")
+			? rawMode
+			: `ace/mode/${rawMode}`;
+		return {
+			...resolved,
+			name,
+			caption: resolved.caption || name,
+			mode: modePath,
+		};
+	};
+
+	return {
+		get modes() {
+			return getModes()
+				.map((mode) => toAceMode(mode))
+				.filter(Boolean);
+		},
+		get modesByName() {
+			const source = getModesByName();
+			const result = {};
+			Object.keys(source).forEach((name) => {
+				result[name] = toAceMode(source[name]);
+			});
+			return result;
+		},
+		getModeForPath(path) {
+			return toAceMode(getModeForPath(String(path || "")));
+		},
+	};
+}
+
+function ensureAceCompatApi() {
+	const ace = window.ace || {};
+	const modelistModule = createAceModelistCompatModule();
+	const originalRequire =
+		typeof ace.require === "function" ? ace.require.bind(ace) : null;
+
+	ace.require = (moduleId) => {
+		if (moduleId === "ace/ext/modelist" || moduleId === "ace/ext/modelist.js") {
+			return modelistModule;
+		}
+		return originalRequire?.(moduleId);
+	};
+
+	window.ace = ace;
 }

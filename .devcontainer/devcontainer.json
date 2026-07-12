@@ -1,22 +1,25 @@
 {
   "name": "Acode Development",
-  "image": "mcr.microsoft.com/devcontainers/java:1-21-bullseye",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "target": "devcontainer"
+  },
+
+  "containerEnv": {
+    "JAVA_HOME": "/usr/local/openjdk-21"
+  },
+  "remoteEnv": {
+    "JAVA_HOME": "/usr/local/openjdk-21",
+    "ANDROID_SDK_ROOT": "${containerEnv:ANDROID_HOME}",
+    "PATH": "${containerEnv:PATH}:${containerEnv:ANDROID_HOME}/build-tools/36.0.0"
+  },
 
   "features": {
-    "ghcr.io/devcontainers/features/java:1": {
-      "installGradle": true,
-      "installGroovy": false,
-      "installMaven": false,
-      "installAnt": false,
-      "version": "21",
-      "jdkDistro": "ms",
-      "gradleVersion": "latest"
-    },
     "ghcr.io/nordcominc/devcontainer-features/android-sdk:1": {
-      "platform": "35",
-      "build_tools": "35.0.0"
+      "platform": "36",
+      "build_tools": "36.0.0"
     },
-    "ghcr.io/devcontainers/features/node:1": {
+    "ghcr.io/devcontainers/features/node:2.1": {
       "nodeGypDependencies": false,
       "installYarnUsingApt": false,
       "version": "lts",
@@ -24,9 +27,9 @@
       "nvmVersion": "latest"
     }
   },
-
+  "overrideCommand": true,
   "postCreateCommand": "pnpm run setup",
-
+  "remoteUser": "root",
   "customizations": {
     "vscode": {
       "extensions": ["biomejs.biome", "redhat.java"],

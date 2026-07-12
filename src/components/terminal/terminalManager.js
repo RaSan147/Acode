@@ -3,18 +3,18 @@
  * Handles terminal session creation and management
  */
 
-import EditorFile from "lib/editorFile";
-import TerminalComponent from "./terminal";
-import TerminalTouchSelection from "./terminalTouchSelection";
 import "@xterm/xterm/css/xterm.css";
 import quickTools from "components/quickTools";
 import toast from "components/toast";
 import alert from "dialogs/alert";
 import confirm from "dialogs/confirm";
+import EditorFile from "lib/editorFile";
 import openFile from "lib/openFile";
 import openFolder from "lib/openFolder";
 import appSettings from "lib/settings";
 import helpers from "utils/helpers";
+import TerminalComponent from "./terminal";
+import TerminalTouchSelection from "./terminalTouchSelection";
 
 const TERMINAL_SESSION_STORAGE_KEY = "acodeTerminalSessions";
 
@@ -73,6 +73,7 @@ class TerminalManager {
 				sessions.push({
 					pid: entry,
 					name: `Terminal ${entry}`,
+					pinned: false,
 				});
 				changed = true;
 				continue;
@@ -88,12 +89,13 @@ class TerminalManager {
 				typeof entry.name === "string" && entry.name.trim()
 					? entry.name.trim()
 					: `Terminal ${pid}`;
+			const pinned = entry.pinned === true;
 
-			if (entry.pid !== pid || entry.name !== name) {
+			if (entry.pid !== pid || entry.name !== name || entry.pinned !== pinned) {
 				changed = true;
 			}
 
-			sessions.push({ pid, name });
+			sessions.push({ pid, name, pinned });
 		}
 
 		for (const session of sessions) {
@@ -109,6 +111,7 @@ class TerminalManager {
 					typeof session.name === "string" && session.name.trim()
 						? session.name.trim()
 						: `Terminal ${pid}`,
+				pinned: session.pinned === true,
 			});
 		}
 
@@ -174,7 +177,7 @@ class TerminalManager {
 		}
 	}
 
-	async persistTerminalSession(pid, name) {
+	async persistTerminalSession(pid, name, pinned = false) {
 		if (!pid) return;
 
 		const pidStr = String(pid);
@@ -185,6 +188,7 @@ class TerminalManager {
 		const sessionData = {
 			pid: pidStr,
 			name: name || `Terminal ${pidStr}`,
+			pinned: pinned === true,
 		};
 
 		if (existingIndex >= 0) {
@@ -228,6 +232,7 @@ class TerminalManager {
 				const instance = await this.createServerTerminal({
 					pid: session.pid,
 					name: session.name,
+					pinned: session.pinned === true,
 					reconnecting: true,
 					render: false,
 				});
@@ -266,7 +271,8 @@ class TerminalManager {
 	 */
 	async createTerminal(options = {}) {
 		try {
-			const { render, serverMode, reconnecting, ...terminalOptions } = options;
+			const { render, serverMode, reconnecting, pinned, ...terminalOptions } =
+				options;
 			const shouldRender = render !== false;
 			const isServerMode = serverMode !== false;
 			const isReconnecting = reconnecting === true;
@@ -302,21 +308,25 @@ class TerminalManager {
 				id: `terminal-${terminalId}`,
 			});
 
-			// Terminal styles (inject once)
-			if (!document.getElementById("acode-terminal-styles")) {
-				const terminalStyles = this.getTerminalStyles();
-				const terminalStyle = tag("style", {
+			// Terminal styles (inject or update)
+			const terminalStyles = this.getTerminalStyles();
+			let terminalStyle = document.getElementById("acode-terminal-styles");
+			if (!terminalStyle) {
+				terminalStyle = tag("style", {
 					id: "acode-terminal-styles",
 					textContent: terminalStyles,
 				});
 				document.body.appendChild(terminalStyle);
+			} else {
+				terminalStyle.textContent = terminalStyles;
 			}
 
 			// Create EditorFile for terminal
 			const terminalFile = new EditorFile(terminalName, {
 				type: "terminal",
 				content: terminalContainer,
-				tabIcon: "licons terminal",
+				tabIcon: "icon square-terminal",
+				pinned,
 				render: shouldRender,
 			});
 
@@ -363,6 +373,7 @@ class TerminalManager {
 							await this.persistTerminalSession(
 								terminalComponent.pid,
 								terminalName,
+								terminalFile.pinned,
 							);
 						}
 						resolve(instance);
@@ -382,7 +393,7 @@ class TerminalManager {
 						try {
 							// Force remove the tab without confirmation
 							terminalFile._skipTerminalCloseConfirm = true;
-							terminalFile.remove(true);
+							terminalFile.remove(true, { ignorePinned: true });
 						} catch (removeError) {
 							console.error("Error removing terminal tab:", removeError);
 						}
@@ -434,12 +445,12 @@ class TerminalManager {
 			const installResult = await Terminal.install(
 				(message) => {
 					// Remove stdout/stderr prefix for
-					const cleanMessage = message.replace(/^(stdout|stderr)\s+/, "");
+					const cleanMessage = this.formatInstallLog(message);
 					installTerminal.component.write(`${cleanMessage}\r\n`);
 				},
-				(error) => {
+				(...errorParts) => {
 					// Remove stdout/stderr prefix
-					const cleanError = error.replace(/^(stdout|stderr)\s+/, "");
+					const cleanError = this.formatInstallLog(errorParts);
 					installTerminal.component.write(
 						`\x1b[31mError: ${cleanError}\x1b[0m\r\n`,
 					);
@@ -450,19 +461,32 @@ class TerminalManager {
 			if (installResult === true) {
 				return { success: true };
 			} else {
+				const error =
+					Terminal.lastInstallError ||
+					"Terminal installation failed - process did not exit with code 0";
 				return {
 					success: false,
-					error:
-						"Terminal installation failed - process did not exit with code 0",
+					error,
 				};
 			}
 		} catch (error) {
 			console.error("Terminal installation failed:", error);
 			return {
 				success: false,
-				error: `Terminal installation failed: ${error.message}`,
+				error: `Terminal installation failed: ${this.formatInstallLog(error)}`,
 			};
 		}
+	}
+
+	formatInstallLog(value) {
+		const values = Array.isArray(value) ? value : [value];
+		const message = values
+			.filter((entry) => entry != null)
+			.map((entry) => Terminal.formatError(entry))
+			.filter(Boolean)
+			.join(" ");
+
+		return message.replace(/^(stdout|stderr)\s+/, "") || "Unknown error";
 	}
 
 	/**
@@ -484,14 +508,17 @@ class TerminalManager {
 			id: `terminal-${terminalId}`,
 		});
 
-		// Terminal styles (inject once)
-		if (!document.getElementById("acode-terminal-styles")) {
-			const terminalStyles = this.getTerminalStyles();
-			const terminalStyle = tag("style", {
+		// Terminal styles (inject or update)
+		const terminalStyles = this.getTerminalStyles();
+		let terminalStyle = document.getElementById("acode-terminal-styles");
+		if (!terminalStyle) {
+			terminalStyle = tag("style", {
 				id: "acode-terminal-styles",
 				textContent: terminalStyles,
 			});
 			document.body.appendChild(terminalStyle);
+		} else {
+			terminalStyle.textContent = terminalStyles;
 		}
 
 		// Create EditorFile for terminal
@@ -560,25 +587,33 @@ class TerminalManager {
 		const textarea = terminalComponent.terminal?.textarea;
 		if (textarea) {
 			const onFocus = () => {
-				const { $toggler } = quickTools;
-				$toggler.classList.add("hide");
-				clearTimeout(this.togglerTimeout);
-				this.togglerTimeout = setTimeout(() => {
-					$toggler.style.display = "none";
-				}, 300);
+				clearTimeout(this.onBlurTimeout);
+				this.onFocusTimeout = setTimeout(() => {
+					const { $toggler } = quickTools;
+					$toggler.classList.add("hide");
+					clearTimeout(this.quickToolsTogglerTimeout);
+					this.quickToolsTogglerTimeout = setTimeout(() => {
+						$toggler.style.display = "none";
+					}, 300);
+				}, 100);
 			};
 
 			const onBlur = () => {
-				const { $toggler } = quickTools;
-				clearTimeout(this.togglerTimeout);
-				$toggler.style.display = "";
-				setTimeout(() => {
-					$toggler.classList.remove("hide");
-				}, 10);
+				clearTimeout(this.onFocusTimeout);
+				this.onBlurTimeout = setTimeout(() => {
+					const { $toggler } = quickTools;
+					$toggler.style.display = "";
+					clearTimeout(this.quickToolsTogglerTimeout);
+					requestAnimationFrame(() => $toggler.classList.remove("hide"));
+				}, 100);
 			};
 
 			textarea.addEventListener("focus", onFocus);
 			textarea.addEventListener("blur", onBlur);
+
+			if (textarea === document.activeElement) {
+				onFocus();
+			}
 
 			terminalComponent.cleanupFocusHandlers = () => {
 				textarea.removeEventListener("focus", onFocus);
@@ -613,10 +648,22 @@ class TerminalManager {
 		terminalFile.onclose = () => {
 			this.closeTerminal(terminalId);
 		};
+		terminalFile.onpinstatechange = (pinned) => {
+			if (!terminalComponent.serverMode || !terminalComponent.pid) return;
+			void this.persistTerminalSession(
+				terminalComponent.pid,
+				terminalFile.filename,
+				pinned,
+			);
+		};
 
 		terminalFile._skipTerminalCloseConfirm = false;
 		const originalRemove = terminalFile.remove.bind(terminalFile);
-		terminalFile.remove = async (force = false) => {
+		terminalFile.remove = async (force = false, options = {}) => {
+			if (terminalFile.pinned && !options?.ignorePinned) {
+				return originalRemove(force, options);
+			}
+
 			if (
 				!terminalFile._skipTerminalCloseConfirm &&
 				this.shouldConfirmTerminalClose()
@@ -627,7 +674,7 @@ class TerminalManager {
 			}
 
 			terminalFile._skipTerminalCloseConfirm = false;
-			return originalRemove(force);
+			return originalRemove(force, options);
 		};
 
 		// Enhanced resize handling with debouncing
@@ -635,14 +682,30 @@ class TerminalManager {
 		const RESIZE_DEBOUNCE = 200;
 		let lastResizeTime = 0;
 
-		let lastWidth = 0;
-		let lastHeight = 0;
-		const resizeObserver = new ResizeObserver((entries) => {
+		let lastWidth = null;
+		let lastHeight = null;
+
+		const handleResize = (entries) => {
 			const now = Date.now();
 			const entry = entries && entries[0];
 			const cr = entry?.contentRect;
 			const width = cr?.width ?? terminalFile.content?.clientWidth ?? 0;
 			const height = cr?.height ?? terminalFile.content?.clientHeight ?? 0;
+
+			// Skip resize events when container is hidden (via any method: inline style, CSS class, etc.)
+			const isHidden =
+				getComputedStyle(terminalFile.content).display === "none" ||
+				terminalFile.content?.offsetHeight === 0;
+			if (isHidden) {
+				return;
+			}
+
+			if (lastWidth === null || lastHeight === null) {
+				lastWidth = width;
+				lastHeight = height;
+
+				return;
+			}
 
 			// Clear any pending resize
 			if (resizeTimeout) {
@@ -673,15 +736,30 @@ class TerminalManager {
 					console.error(`Resize error for terminal ${terminalId}:`, error);
 				}
 			}, RESIZE_DEBOUNCE);
-		});
+		};
+
+		const resizeObserver =
+			typeof ResizeObserver === "function"
+				? new ResizeObserver(handleResize)
+				: null;
+		let resizeFallbackInterval = null;
 
 		// Wait for the terminal container to be available, then observe it
 		setTimeout(() => {
 			const containerElement = terminalFile.content;
 			if (containerElement && containerElement instanceof Element) {
-				resizeObserver.observe(containerElement);
-				// store observer so we can disconnect on close
-				terminalFile._resizeObserver = resizeObserver;
+				if (resizeObserver) {
+					resizeObserver.observe(containerElement);
+					// store observer so we can disconnect on close
+					terminalFile._resizeObserver = resizeObserver;
+				} else {
+					resizeFallbackInterval = setInterval(() => handleResize(), 500);
+					terminalFile._resizeObserver = {
+						disconnect() {
+							clearInterval(resizeFallbackInterval);
+						},
+					};
+				}
 			} else {
 				console.warn("Terminal container not available for ResizeObserver");
 			}
@@ -717,6 +795,7 @@ class TerminalManager {
 					await this.persistTerminalSession(
 						terminalComponent.pid,
 						formattedTitle,
+						terminalFile.pinned,
 					);
 				}
 
@@ -744,7 +823,7 @@ class TerminalManager {
 
 			this.closeTerminal(terminalId);
 			terminalFile._skipTerminalCloseConfirm = true;
-			terminalFile.remove(true);
+			terminalFile.remove(true, { ignorePinned: true });
 			toast(message);
 		};
 
@@ -823,7 +902,7 @@ class TerminalManager {
 			if (removeTab && terminal.file) {
 				try {
 					terminal.file._skipTerminalCloseConfirm = true;
-					terminal.file.remove(true);
+					terminal.file.remove(true, { ignorePinned: true });
 				} catch (removeError) {
 					console.error("Error removing terminal tab:", removeError);
 				}
@@ -923,6 +1002,11 @@ class TerminalManager {
 			.terminal-content .xterm {
 				padding: 0.25rem;
 				box-sizing: border-box;
+				touch-action: none;
+			}
+
+			.terminal-content .xterm-viewport {
+				overscroll-behavior: none;
 			}
 		`;
 	}

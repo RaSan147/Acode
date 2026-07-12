@@ -1,5 +1,6 @@
 import fsOperation from "fileSystem";
-import box from "dialogs/box";
+import dialog from "dialogs/dialog";
+import loader from "dialogs/loader";
 import { filesize } from "filesize";
 import mustache from "mustache";
 import helpers from "utils/helpers";
@@ -12,8 +13,10 @@ import settings from "./settings";
  * @param {String} [url]
  */
 export default async function showFileInfo(url) {
-	if (!url) url = editorManager.activeFile.uri;
-	app.classList.add("title-loading");
+	const activeFile = editorManager.activeFile;
+	if (!url) url = activeFile?.uri;
+	if (!url) return;
+	loader.showTitleLoader();
 	try {
 		const fs = fsOperation(url);
 		const stats = await fs.stat();
@@ -23,7 +26,7 @@ export default async function showFileInfo(url) {
 		lastModified = new Date(lastModified).toLocaleString();
 
 		const protocol = Url.getProtocol(url);
-		const fileType = type.toLowerCase();
+		const fileType = String(type || "").toLowerCase();
 		const options = {
 			name: name.slice(0, name.length - Url.extname(name).length),
 			extension: Url.extname(name),
@@ -33,10 +36,11 @@ export default async function showFileInfo(url) {
 			lang: strings,
 			showUri: helpers.getVirtualPath(url),
 			isEditor:
-				fileType === "text/plain" || editorManager.activeFile.type === "editor",
+				fileType === "text/plain" ||
+				(activeFile?.uri === url && activeFile.type === "editor"),
 		};
 
-		if (editorManager.activeFile.type === "editor") {
+		if (options.isEditor) {
 			const value = await fs.readFile(settings.value.defaultFileEncoding);
 			options.lineCount = value.split(/\n+/).length;
 			options.wordCount = value.split(/\s+|\n+/).length;
@@ -51,14 +55,13 @@ export default async function showFileInfo(url) {
 			}
 		}
 
-		box("", mustache.render($_fileInfo, options), true).onclick((e) => {
+		dialog("", mustache.render($_fileInfo, options), true).onclick((e) => {
 			const $target = e.target;
 			if ($target instanceof HTMLElement) {
 				const action = $target.getAttribute("action");
 
 				if (action === "copy") {
 					cordova.plugins.clipboard.copy($target.textContent);
-					toast(strings["copied to clipboard"]);
 				}
 			}
 		});
@@ -66,5 +69,5 @@ export default async function showFileInfo(url) {
 		helpers.error(err);
 	}
 
-	app.classList.remove("title-loading");
+	loader.removeTitleLoader();
 }

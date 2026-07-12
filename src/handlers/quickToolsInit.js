@@ -1,10 +1,14 @@
+import { redoDepth, undoDepth } from "@codemirror/commands";
 import quickTools from "components/quickTools";
-import constants from "lib/constants";
+import { description } from "components/quickTools/items";
+import { hideTooltip, showTooltip } from "components/tooltip";
+import config from "lib/config";
 import appSettings from "lib/settings";
 import actions, { key } from "./quickTools";
 
 const CONTEXT_MENU_TIMEOUT = 500;
 const MOVE_X_THRESHOLD = 50;
+const TOUCH_EVENT_OPTIONS = { passive: false };
 
 let time;
 let moveX;
@@ -16,6 +20,7 @@ let startTime;
 let contextmenuTimeout;
 let active = false; // is button already active
 let slide = 0;
+let longPress = false;
 
 /**@type {HTMLElement} */
 let $row;
@@ -25,6 +30,7 @@ let timeout;
 let $touchstart;
 
 function reset() {
+	clearTouchFeedback();
 	moveX = 0;
 	movedX = 0;
 	time = 300;
@@ -34,6 +40,13 @@ function reset() {
 	touchMoved = undefined;
 	contextmenuTimeout = null;
 	active = false;
+	longPress = false;
+}
+
+function clearTouchFeedback() {
+	if ($touchstart && !active) {
+		$touchstart.classList.remove("active");
+	}
 }
 
 /**
@@ -46,6 +59,9 @@ export default function init() {
 	$toggler.addEventListener("click", (e) => {
 		e.preventDefault();
 		e.stopPropagation();
+		if (appSettings.value.vibrateOnTap) {
+			navigator.vibrate(config.VIBRATION_TIME);
+		}
 		actions("toggle");
 	});
 
@@ -69,20 +85,34 @@ export default function init() {
 		else $footer.removeAttribute("data-meta");
 	});
 
-	editorManager.on(["file-content-changed", "switch-file"], () => {
-		if (editorManager.activeFile?.isUnsaved) {
-			$footer.setAttribute("data-unsaved", "true");
-		} else {
-			$footer.removeAttribute("data-unsaved");
-		}
-	});
+	editorManager.on(
+		[
+			"file-content-changed",
+			"switch-file",
+			"new-file",
+			"file-loaded",
+			"remove-file",
+		],
+		scheduleUpdateQuickToolsState,
+	);
 
 	editorManager.on("save-file", () => {
-		$footer.removeAttribute("data-unsaved");
+		scheduleUpdateQuickToolsState();
 	});
 
-	root.append($footer, $toggler);
+	editorManager.on("editor-state-changed", updateHistoryButtons);
+
+	appSettings.on("update:quicktoolsItems:after", () => {
+		setTimeout(updateHistoryButtons, 100);
+	});
+
+	root.append($footer);
+	if (appSettings.value.floatingButton) {
+		root.appendOuter($toggler);
+	}
 	document.body.append($input);
+	scheduleUpdateQuickToolsState();
+
 	if (
 		appSettings.value.quickToolsTriggerMode ===
 		appSettings.QUICKTOOLS_TRIGGER_MODE_CLICK
@@ -92,7 +122,7 @@ export default function init() {
 		$footer.addEventListener("contextmenu", oncontextmenu, true);
 		$footer.addEventListener("wheel", onwheel, { passive: false });
 	} else {
-		$footer.addEventListener("touchstart", touchstart);
+		$footer.addEventListener("touchstart", touchstart, TOUCH_EVENT_OPTIONS);
 		$footer.addEventListener("keydown", touchstart);
 	}
 
@@ -108,7 +138,7 @@ export default function init() {
 			$footer.removeEventListener("click", onclick);
 			$footer.removeEventListener("wheel", onwheel);
 			$footer.addEventListener("keydown", touchstart);
-			$footer.addEventListener("touchstart", touchstart);
+			$footer.addEventListener("touchstart", touchstart, TOUCH_EVENT_OPTIONS);
 		}
 	});
 }
@@ -133,9 +163,16 @@ function onwheel(e) {
 function onclick(e) {
 	reset();
 
+	if (e.target.disabled) {
+		e.preventDefault();
+		e.stopPropagation();
+		return;
+	}
+
 	e.preventDefault();
 	e.stopPropagation();
 	click(e.target);
+	hideTooltip();
 	clearTimeout(timeout);
 }
 
@@ -146,19 +183,28 @@ function touchstart(e) {
 	if ($el instanceof HTMLInputElement) {
 		return;
 	}
+	if ($el.disabled) {
+		e.preventDefault();
+		e.stopPropagation();
+		return;
+	}
 
 	startTime = performance.now();
 	$touchstart = $el;
 	e.preventDefault();
 	e.stopPropagation();
 
-	if ($el.dataset.repeat === "true") {
-		contextmenuTimeout = setTimeout(() => {
-			if (touchMoved) return;
+	contextmenuTimeout = setTimeout(() => {
+		if (touchMoved) return;
+
+		longPress = true;
+		showTooltip($el, description($el.dataset.id));
+
+		if ($el.dataset.repeat === "true") {
 			contextmenu = true;
 			oncontextmenu(e);
-		}, CONTEXT_MENU_TIMEOUT);
-	}
+		}
+	}, CONTEXT_MENU_TIMEOUT);
 
 	if ($el.classList.contains("active")) {
 		active = true;
@@ -262,7 +308,7 @@ function touchend(e) {
 		return;
 	}
 
-	if ($touchstart !== $el || contextmenu) {
+	if ($touchstart !== $el || contextmenu || longPress) {
 		touchcancel(e);
 		return;
 	}
@@ -282,7 +328,8 @@ function touchcancel(e) {
 	document.removeEventListener("touchmove", touchmove);
 	clearTimeout(timeout);
 	clearTimeout(contextmenuTimeout);
-	if (!active) $touchstart.classList.remove("active");
+	clearTouchFeedback();
+	hideTooltip();
 }
 
 /**
@@ -300,7 +347,7 @@ function oncontextmenu(e) {
 	const { editor, activeFile } = editorManager;
 
 	if (isClickMode && appSettings.value.vibrateOnTap) {
-		navigator.vibrate(constants.VIBRATION_TIME_LONG);
+		navigator.vibrate(config.VIBRATION_TIME_LONG);
 		$el.classList.add("active");
 	}
 
@@ -323,11 +370,18 @@ function oncontextmenu(e) {
  * @param {HTMLElement} $el
  */
 function click($el) {
+	if ($el.disabled) return;
+
 	$el.classList.add("click");
 	clearTimeout($el.dataset.timeout);
 	$el.dataset.timeout = setTimeout(() => {
 		$el.classList.remove("click");
 	}, 300);
+
+	if (appSettings.value.vibrateOnTap) {
+		navigator.vibrate(config.VIBRATION_TIME);
+	}
+
 	const { action } = $el.dataset;
 	if (!action) return;
 
@@ -338,4 +392,47 @@ function click($el) {
 	}
 
 	actions(action, value);
+}
+
+function scheduleUpdateQuickToolsState() {
+	setTimeout(updateQuickToolsState, 0);
+}
+
+function updateQuickToolsState() {
+	const { $footer } = quickTools;
+
+	if (editorManager.activeFile?.isUnsaved) {
+		$footer.setAttribute("data-unsaved", "true");
+	} else {
+		$footer.removeAttribute("data-unsaved");
+	}
+
+	updateHistoryButtons();
+}
+
+function updateHistoryButtons() {
+	const { editor, activeFile } = editorManager;
+	const disabled = !editor || activeFile?.type !== "editor";
+
+	updateHistoryButton("undo", disabled || undoDepth(editor.state) === 0);
+	updateHistoryButton("redo", disabled || redoDepth(editor.state) === 0);
+}
+
+function updateHistoryButton(id, disabled) {
+	const buttons = new Set();
+
+	for (const $container of [
+		quickTools.$footer,
+		quickTools.$row1,
+		quickTools.$row2,
+	]) {
+		$container?.querySelectorAll(`[data-id="${id}"]`)?.forEach(($button) => {
+			buttons.add($button);
+		});
+	}
+
+	buttons.forEach(($button) => {
+		$button.disabled = disabled;
+		$button.setAttribute("aria-disabled", String(disabled));
+	});
 }

@@ -1,4 +1,5 @@
 import fsOperation from "fileSystem";
+import { Text } from "@codemirror/state";
 import AudioPlayer from "components/audioPlayer";
 import alert from "dialogs/alert";
 import confirm from "dialogs/confirm";
@@ -20,6 +21,7 @@ import appSettings from "./settings";
  * @property {string} encoding
  * @property {string} mode
  * @property {string} uri
+ * @property {string} paneId
  */
 
 /**
@@ -35,14 +37,24 @@ export default async function openFile(file, options = {}) {
 
 		/**@type {EditorFile} */
 		const existingFile = editorManager.getFile(uri, "uri");
-		const { cursorPos, render, onsave, text, mode, encoding } = options;
+		const { cursorPos, render, onsave, text, mode, encoding, paneId } = options;
 
 		if (existingFile) {
 			// If file is already opened and new text is provided
-			const existingText = existingFile.session.doc.toString() ?? "";
+			const incomingDoc =
+				text != null ? Text.of(String(text).split("\n")) : null;
 
 			// If file is already opened
-			existingFile.makeActive();
+			const targetPane = paneId
+				? editorManager.panes?.find((pane) => pane.id === paneId)
+				: null;
+			if (targetPane) {
+				editorManager.moveFileToPane?.(existingFile, targetPane, {
+					activate: true,
+				});
+			} else {
+				existingFile.makeActive();
+			}
 
 			const { editor } = editorManager;
 
@@ -50,7 +62,7 @@ export default async function openFile(file, options = {}) {
 				existingFile.onsave = onsave;
 			}
 
-			if (text && existingText !== text) {
+			if (incomingDoc && !existingFile.session?.doc?.eq?.(incomingDoc)) {
 				// let confirmation = true;
 				// if (existingFile.isUnsaved) {
 				//   const message = strings['reopen file'].replace('{file}', existingFile.filename);
@@ -105,6 +117,9 @@ export default async function openFile(file, options = {}) {
 				readOnly,
 				encoding: detectedEncoding || encoding,
 				SAFMode: mode,
+				savedMtime: helpers.getStatMtime(fileInfo),
+				diskMtime: helpers.getStatMtime(fileInfo),
+				paneId,
 			});
 		};
 
@@ -176,6 +191,8 @@ export default async function openFile(file, options = {}) {
 				tabIcon: "file file_type_video",
 				content: videoContainer,
 				render: true,
+				hideQuickTools: true,
+				paneId,
 			});
 			return;
 		}
@@ -343,6 +360,8 @@ export default async function openFile(file, options = {}) {
 				tabIcon: "file file_type_image",
 				content: imageContainer,
 				render: true,
+				hideQuickTools: true,
+				paneId,
 			});
 			return;
 		}
@@ -370,6 +389,8 @@ export default async function openFile(file, options = {}) {
 				tabIcon: "file file_type_audio",
 				content: audioPlayer.container,
 				render: true,
+				hideQuickTools: true,
+				paneId,
 			});
 			audioTab.onclose = () => {
 				audioPlayer.cleanup();

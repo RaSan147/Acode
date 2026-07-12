@@ -1,18 +1,20 @@
 import fsOperation from "fileSystem";
+import { getDocText } from "cm/editorUtils";
 import tutorial from "components/tutorial";
 import alert from "dialogs/alert";
-import box from "dialogs/box";
+import dialog from "dialogs/dialog";
 import markdownIt from "markdown-it";
 import anchor from "markdown-it-anchor";
 import MarkdownItGitHubAlerts from "markdown-it-github-alerts";
 import mimeType from "mime-types";
 import mustache from "mustache";
+import openMarkdownPreview from "pages/markdownPreview";
 import browser from "plugins/browser";
 import helpers from "utils/helpers";
 import Url from "utils/Url";
 import $_console from "views/console.hbs";
 import $_markdown from "views/markdown.hbs";
-import constants from "./constants";
+import config from "./config";
 import EditorFile from "./editorFile";
 import openFolder from "./openFolder";
 import appSettings from "./settings";
@@ -31,6 +33,15 @@ async function run(
 	target = appSettings.value.previewMode,
 	runFile = false,
 ) {
+	/** @type {EditorFile} */
+	const activeFile = isConsole ? null : editorManager.activeFile;
+
+	if (!isConsole && Url.extname(activeFile?.filename || "") === ".md") {
+		if (!(await activeFile?.canRun())) return;
+		await openMarkdownPreview(activeFile);
+		return;
+	}
+
 	if (!isConsole && !runFile) {
 		const { serverPort, previewPort, previewMode, disableCache, host } =
 			appSettings.value;
@@ -46,8 +57,6 @@ async function run(
 		}
 	}
 
-	/** @type {EditorFile} */
-	const activeFile = isConsole ? null : editorManager.activeFile;
 	if (!isConsole && !(await activeFile?.canRun())) return;
 
 	if (!isConsole && !localStorage.__init_runPreview) {
@@ -84,7 +93,7 @@ async function run(
 				type: mimeType.lookup(extension),
 			});
 
-			box(filename, `<img src='${URL.createObjectURL(blob)}'>`);
+			dialog(filename, `<img src='${URL.createObjectURL(blob)}'>`);
 		} catch (err) {
 			helpers.error(err);
 		}
@@ -134,7 +143,7 @@ async function run(
 		target = "inapp";
 		filename = "console.html";
 		pathName = `${ASSETS_DIRECTORY}www/`;
-		port = constants.CONSOLE_PORT;
+		port = config.CONSOLE_PORT;
 	}
 
 	function start() {
@@ -197,7 +206,7 @@ async function run(
 				break;
 
 			case EXECUTING_SCRIPT: {
-				const text = activeFile?.session?.doc?.toString() || "";
+				const text = getDocText(activeFile?.session?.doc);
 				sendText(text, reqId, "application/javascript");
 				break;
 			}
@@ -233,10 +242,10 @@ async function run(
 				}
 			}
 
-			if (activeFile.mode === "single") {
+			if (activeFile.SAFMode === "single") {
 				if (filename === reqPath) {
 					sendText(
-						activeFile.session?.doc?.toString(),
+						getDocText(activeFile.session?.doc),
 						reqId,
 						mimeType.lookup(filename),
 					);
@@ -252,8 +261,13 @@ async function run(
 			if (pathName) {
 				url = Url.join(pathName, reqPath);
 				file = editorManager.getFile(url, "uri");
-			} else if (!activeFile.uri) {
+			} else if (!activeFile.uri && filename === reqPath) {
 				file = activeFile;
+			}
+
+			if (!url && !file) {
+				error(reqId);
+				return;
 			}
 
 			// Handle extensionless URLs (e.g., "about" -> "about.html" or "about/index.html")
@@ -270,7 +284,7 @@ async function run(
 				const htmlUrl = Url.join(pathName, reqPath + ".html");
 				const htmlFile = editorManager.getFile(htmlUrl, "uri");
 				if (htmlFile?.loaded && htmlFile.isUnsaved) {
-					sendHTML(htmlFile.session?.doc?.toString(), reqId);
+					sendHTML(getDocText(htmlFile.session?.doc), reqId);
 					return;
 				}
 				const htmlFs = fsOperation(htmlUrl);
@@ -294,8 +308,8 @@ async function run(
 			switch (ext) {
 				case ".htm":
 				case ".html":
-					if (file && file.loaded && file.isUnsaved) {
-						sendHTML(file.session?.doc?.toString(), reqId);
+					if (!url || (file && file.loaded && file.isUnsaved)) {
+						sendHTML(getDocText(file.session?.doc), reqId);
 					} else {
 						sendFileContent(url, reqId, MIMETYPE_HTML);
 					}
@@ -312,7 +326,7 @@ async function run(
 										.toLowerCase()
 										.replace(/[^a-z0-9]+/g, "-"),
 							})
-							.render(file.session?.doc?.toString());
+							.render(getDocText(file.session?.doc));
 						const doc = mustache.render($_markdown, {
 							html,
 							filename,
@@ -323,9 +337,9 @@ async function run(
 					break;
 
 				default:
-					if (file && file.loaded && file.isUnsaved) {
+					if (!url || (file && file.loaded && file.isUnsaved)) {
 						sendText(
-							file.session?.doc?.toString(),
+							getDocText(file.session?.doc),
 							reqId,
 							mimeType.lookup(file.filename),
 						);

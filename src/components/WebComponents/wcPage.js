@@ -1,3 +1,4 @@
+import { animate, press } from "motion";
 import tile from "../tile";
 
 export default class WCPage extends HTMLElement {
@@ -53,6 +54,22 @@ export default class WCPage extends HTMLElement {
 			></span>
 		);
 
+		press(this.#leadBtn, (element) => {
+			if (document.body.classList.contains("no-animation")) return;
+			animate(
+				element,
+				{ scale: 0.85 },
+				{ type: "spring", stiffness: 400, damping: 20 },
+			);
+			return () => {
+				animate(
+					element,
+					{ scale: 1 },
+					{ type: "spring", stiffness: 400, damping: 20 },
+				);
+			};
+		});
+
 		this.#header = tile({
 			type: "header",
 			text: title || "Page",
@@ -80,6 +97,29 @@ export default class WCPage extends HTMLElement {
 
 	connectedCallback() {
 		this.classList.remove("hide");
+		const isPrimary = this.classList.contains("primary");
+		const isNoTransition = this.classList.contains("no-transition");
+
+		if (!isPrimary) {
+			if (document.body.classList.contains("no-animation")) {
+				this.style.opacity = "";
+			} else {
+				this.style.opacity = "0";
+				animate(
+					this,
+					{
+						opacity: 1,
+					},
+					{
+						duration: isNoTransition ? 0.08 : 0.14,
+						ease: "easeOut",
+					},
+				).then(() => {
+					this.style.opacity = "";
+				});
+			}
+		}
+
 		if (typeof this.onconnect === "function") this.onconnect();
 		this.#on.show.forEach((cb) => cb.call(this));
 	}
@@ -120,12 +160,29 @@ export default class WCPage extends HTMLElement {
 	}
 
 	hide() {
-		this.classList.add("hide");
 		if (typeof this.onhide === "function") this.onhide();
-		setTimeout(() => {
+
+		const isPrimary = this.classList.contains("primary");
+		const isNoTransition = this.classList.contains("no-transition");
+
+		if (isPrimary || document.body.classList.contains("no-animation")) {
 			this.remove();
 			this.handler.remove();
-		}, 150);
+		} else {
+			animate(
+				this,
+				{
+					opacity: 0,
+				},
+				{
+					duration: isNoTransition ? 0.08 : 0.12,
+					ease: "easeIn",
+				},
+			).then(() => {
+				this.remove();
+				this.handler.remove();
+			});
+		}
 	}
 
 	get body() {
@@ -200,6 +257,8 @@ export default class WCPage extends HTMLElement {
 class PageHandler {
 	$el;
 	$replacement;
+	scrollLeft = 0;
+	scrollTop = 0;
 	onRestore;
 	onReplace;
 
@@ -218,12 +277,26 @@ class PageHandler {
 
 		this.$el.on("hide", this.onhide);
 		this.$el.on("show", this.onshow);
+
+		// Cache scroll position on scroll event to prevent synchronous layout reading (forced reflow) during page transitions
+		this.$el.addEventListener(
+			"scroll",
+			(e) => {
+				const $body = this.$el.body;
+				if ($body && e.target === $body) {
+					this.scrollLeft = $body.scrollLeft;
+					this.scrollTop = $body.scrollTop;
+				}
+			},
+			{ capture: true, passive: true },
+		);
 	}
 
 	/**
 	 * Replace current element with a replacement element
 	 */
 	replaceEl() {
+		if (this.$el.classList.contains("primary")) return;
 		this.$el.off("hide", this.onhide);
 		if (!this.$el.isConnected || this.$replacement.isConnected) return;
 		if (typeof this.onReplace === "function") this.onReplace();
@@ -239,6 +312,14 @@ class PageHandler {
 		if (typeof this.onRestore === "function") this.onRestore();
 		this.$el.off("hide", this.onhide);
 		this.$replacement.parentElement.replaceChild(this.$el, this.$replacement);
+		const { scrollLeft, scrollTop } = this;
+		requestAnimationFrame(() => {
+			const $body = this.$el.body;
+			if ($body) {
+				$body.scrollLeft = scrollLeft;
+				$body.scrollTop = scrollTop;
+			}
+		});
 		this.$el.on("hide", this.onhide);
 	}
 
@@ -262,7 +343,7 @@ class PageHandler {
  */
 function handlePagesForSmoothExperience() {
 	const $pages = [...tag.getAll("wc-page")];
-	for (let $page of $pages.slice(0, -1)) {
+	for (let $page of $pages.slice(0, -2)) {
 		$page.handler.replaceEl();
 	}
 }

@@ -1,5 +1,5 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.1.4/schema.json",
+	"$schema": "https://biomejs.dev/schemas/2.4.11/schema.json",
 	"formatter": {
 		"enabled": true,
 		"indentStyle": "tab"
@@ -39,18 +39,15 @@
 	},
 	"files": {
 		"includes": [
-			"**/src/**/*",
-			"**/utils/**/*.js",
-			"!**/www/build/**/*",
-			"**/www/res/**/*.css",
-			"**/src/plugins/terminal/**",
-			"!**/ace-builds",
-			"!**/src/plugins/**/*",
-			"!**/plugins/**/*",
-			"!**/hooks/**/*",
-			"!**/fastlane/**/*",
-			"!**/res/**/*",
-			"!**/platforms/**/*"
+			"src/**/*.js",
+			"utils/**/*.js",
+			"src/lang/**/*.json",
+			"!src/plugins/**/*.js",
+			"!www/**/*",
+			"!plugins/**/*",
+			"!hooks/**/*",
+			"!fastlane/**/*",
+			"!platforms/**/*"
 		]
 	}
 }

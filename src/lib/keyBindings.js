@@ -44,6 +44,27 @@ const APP_BINDING_CONFIG = [
 		readOnly: false,
 	},
 	{
+		name: "closeTabsToRight",
+		description: "Close tabs to the right.",
+		key: null,
+		action: "close-tabs-to-right",
+		readOnly: false,
+	},
+	{
+		name: "closeTabsToLeft",
+		description: "Close tabs to the left.",
+		key: null,
+		action: "close-tabs-to-left",
+		readOnly: false,
+	},
+	{
+		name: "closeOtherTabs",
+		description: "Close other tabs.",
+		key: null,
+		action: "close-other-tabs",
+		readOnly: false,
+	},
+	{
 		name: "newFile",
 		description: "Create new file",
 		key: "Ctrl-N",
@@ -99,6 +120,90 @@ const APP_BINDING_CONFIG = [
 		description: "Open previous file tab",
 		key: "Ctrl-Shift-Tab",
 		action: "prev-file",
+		readOnly: true,
+	},
+	{
+		name: "nextFileHistory",
+		description: "Open next file tab from history",
+		key: null,
+		action: "next-file-history",
+		readOnly: true,
+	},
+	{
+		name: "prevFileHistory",
+		description: "Open previous file tab from history",
+		key: null,
+		action: "prev-file-history",
+		readOnly: true,
+	},
+	{
+		name: "splitPaneRight",
+		description: "Split editor pane right",
+		key: "Ctrl-\\",
+		action: "split-pane-right",
+		readOnly: true,
+	},
+	{
+		name: "splitPaneDown",
+		description: "Split editor pane down",
+		key: "Ctrl-Shift-\\",
+		action: "split-pane-down",
+		readOnly: true,
+	},
+	{
+		name: "closePane",
+		description: "Close active editor pane",
+		key: "Ctrl-Alt-W",
+		action: "close-pane",
+		readOnly: true,
+	},
+	{
+		name: "focusNextPane",
+		description: "Focus next editor pane",
+		key: null,
+		action: "focus-next-pane",
+		readOnly: true,
+	},
+	{
+		name: "focusPreviousPane",
+		description: "Focus previous editor pane",
+		key: null,
+		action: "focus-previous-pane",
+		readOnly: true,
+	},
+	{
+		name: "focusPaneLeft",
+		description: "Focus editor pane to the left",
+		key: "Ctrl-Alt-Left",
+		action: "focus-pane-left",
+		readOnly: true,
+	},
+	{
+		name: "focusPaneRight",
+		description: "Focus editor pane to the right",
+		key: "Ctrl-Alt-Right",
+		action: "focus-pane-right",
+		readOnly: true,
+	},
+	{
+		name: "focusPaneUp",
+		description: "Focus editor pane above",
+		key: "Ctrl-Alt-Up",
+		action: "focus-pane-up",
+		readOnly: true,
+	},
+	{
+		name: "focusPaneDown",
+		description: "Focus editor pane below",
+		key: "Ctrl-Alt-Down",
+		action: "focus-pane-down",
+		readOnly: true,
+	},
+	{
+		name: "moveTabToNewPane",
+		description: "Move current tab to new pane",
+		key: "Ctrl-Alt-\\",
+		action: "move-tab-to-new-pane",
 		readOnly: true,
 	},
 	{
@@ -245,6 +350,18 @@ const APP_BINDING_CONFIG = [
 		description: "Open log file",
 		key: null,
 		action: "open-log-file",
+		readOnly: true,
+	},
+	{
+		name: "increaseFontSize",
+		description: "Increase editor font size",
+		key: "Ctrl-+|Ctrl-=",
+		readOnly: true,
+	},
+	{
+		name: "decreaseFontSize",
+		description: "Decrease editor font size",
+		key: "Ctrl--",
 		readOnly: true,
 	},
 	{
@@ -476,6 +593,43 @@ const APP_BINDING_CONFIG = [
 		readOnly: true,
 		editorOnly: true,
 	},
+	{
+		name: "formatCode",
+		description: "Format Code",
+		key: "Ctrl-Alt-F",
+		readOnly: false,
+		editorOnly: true,
+		action: "format",
+	},
+	{
+		name: "foldCode",
+		description: "Fold code",
+		key: "Ctrl-Shift-[",
+		readOnly: true,
+		editorOnly: true,
+	},
+	{
+		name: "unfoldCode",
+		description: "Unfold code",
+		key: "Ctrl-Shift-]",
+		readOnly: true,
+		editorOnly: true,
+	},
+	{
+		name: "foldAll",
+		description:
+			"Fold all - top-level ranges usually depends on the syntax tree. It may not work reliably if the document isn't fully parsed (e.g., just initialized or too large to parse completely)",
+		key: "Ctrl-Alt-[",
+		readOnly: true,
+		editorOnly: true,
+	},
+	{
+		name: "unfoldAll",
+		description: "Unfold all folded code",
+		key: "Ctrl-Alt-]",
+		readOnly: true,
+		editorOnly: true,
+	},
 ];
 
 const APP_KEY_BINDINGS = buildAppBindings(APP_BINDING_CONFIG);
@@ -630,7 +784,10 @@ function parseKeyParts(combo) {
 	const modifiers = new Set();
 	let baseKey = "";
 	if (!combo) return { modifiers, baseKey };
-	for (const rawPart of combo.split("-")) {
+	const parts = combo.endsWith("-")
+		? [...combo.slice(0, -1).split("-").filter(Boolean), "-"]
+		: combo.split("-");
+	for (const rawPart of parts) {
 		const part = rawPart.trim();
 		if (!part) continue;
 		const normalized = part.charAt(0).toUpperCase() + part.slice(1);

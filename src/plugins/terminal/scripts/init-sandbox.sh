@@ -4,6 +4,26 @@ mkdir -p "$PREFIX/tmp"
 mkdir -p "$PREFIX/alpine/tmp"
 mkdir -p "$PREFIX/public"
 
+SRC1="$PREFIX/alpine/home"
+SRC2="$PREFIX/alpine/root"
+DEST="$PREFIX/public"
+
+mkdir -p "$DEST"
+
+move_all() {
+    SRC="$1"
+
+    [ -d "$SRC" ] || return 0
+
+    # Only continue if directory is not empty
+    [ "$(find "$SRC" -mindepth 1 -maxdepth 1 | head -n 1)" ] || return 0
+
+    find "$SRC" -mindepth 1 -maxdepth 1 -exec mv -f {} "$DEST"/ \;
+}
+
+move_all "$SRC1"
+move_all "$SRC2"
+
 export PROOT_TMP_DIR=$PREFIX/tmp
 
 if [ "$FDROID" = "true" ]; then
@@ -62,7 +82,10 @@ ARGS="$ARGS -b /dev/urandom:/dev/random"
 ARGS="$ARGS -b /proc"
 ARGS="$ARGS -b /sys"
 ARGS="$ARGS -b $PREFIX"
+ARGS="$ARGS -b $NATIVE_DIR"
 ARGS="$ARGS -b $PREFIX/public:/public"
+ARGS="$ARGS -b $PREFIX/public:/home"
+ARGS="$ARGS -b $PREFIX/public:/root"
 ARGS="$ARGS -b $PREFIX/alpine/tmp:/dev/shm"
 
 
@@ -90,4 +113,30 @@ ARGS="$ARGS --sysvipc"
 ARGS="$ARGS -L"
 
 
-$PROOT $ARGS /bin/sh $PREFIX/init-alpine.sh "$@"
+FAILSAFE=false
+INSTALLING=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --failsafe)
+            FAILSAFE=true
+            ;;
+        --installing)
+            INSTALLING=true
+            ;;
+    esac
+done
+
+if [ "$FAILSAFE" = true ] && [ "$INSTALLING" != true ]; then
+    echo "$$" > "$PREFIX/pid"
+
+    LINKER="/system/bin/linker64"
+    ARCH="$(uname -m)"
+    if [ "$ARCH" != "aarch64" ] && [ "$ARCH" != "x86_64" ]; then
+        LINKER="/system/bin/linker"
+    fi
+
+    exec "$LINKER" "$PREFIX/axs" -c "sh"
+else
+    exec "$PROOT" $ARGS /bin/sh "$PREFIX/init-alpine.sh" "$@"
+fi

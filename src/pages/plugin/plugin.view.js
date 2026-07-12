@@ -9,7 +9,8 @@ import alert from "dialogs/alert";
 import DOMPurify from "dompurify";
 import Ref from "html-tag-js/ref";
 import actionStack from "lib/actionStack";
-import constants from "lib/constants";
+import auth, { loginEvents } from "lib/auth";
+import config from "lib/config";
 import helpers from "utils/helpers";
 import Url from "utils/Url";
 
@@ -42,6 +43,8 @@ dayjs.updateLocale("en", {
 	},
 });
 
+export const cleanups = [];
+
 export default (props) => {
 	const {
 		id,
@@ -61,6 +64,8 @@ export default (props) => {
 		author_github: authorGithub,
 		comment_count: commentCount,
 		package_updated_at: packageUpdatedAt,
+		showEditorSupportWarning,
+		unsupportedEditor,
 	} = props;
 
 	let rating = "unrated";
@@ -100,16 +105,16 @@ export default (props) => {
 				<div className="plugin-info">
 					<div className="title-wrapper">
 						<h1 className="plugin-name">{name}</h1>
-						{repository
-							? <a href={repository} className="source-indicator">
-									<i className="icon github"></i>
-									<span>{strings.open_source}</span>
-								</a>
-							: null}
+						{repository ? (
+							<a href={repository} className="source-indicator">
+								<i className="icon github"></i>
+								<span>{strings.open_source}</span>
+							</a>
+						) : null}
 					</div>
 					<div className="plugin-meta">
 						<span className="meta-item">
-							<i className="licons tag" style={{ fontSize: "12px" }}></i>
+							<i className="icon tag" style={{ fontSize: "12px" }}></i>
 							<Version
 								{...props}
 								packageUpdatedAt={packageUpdatedAt}
@@ -121,64 +126,65 @@ export default (props) => {
 							<a href={`https://github.com/${authorGithub}`} className="">
 								{author}
 							</a>
-							{authorVerified
-								? <i
-										on:click={() => {
-											toast(strings["verified publisher"]);
-										}}
-										className="licons verified verified-tick"
-									></i>
-								: ""}
+							{authorVerified ? (
+								<i
+									on:click={() => {
+										toast(strings["verified publisher"]);
+									}}
+									className="icon verified verified-tick"
+								></i>
+							) : (
+								""
+							)}
 						</span>
 						<span className="meta-item">
-							<span
-								className="licons scale"
-								style={{ fontSize: "12px" }}
-							></span>
+							<span className="icon scale" style={{ fontSize: "12px" }}></span>
 							{license || "Unknown"}
 						</span>
 					</div>
-					{votesUp !== undefined
-						? <div className="metrics-row">
-								<div className="metric">
-									<span className="icon save_alt"></span>
-									<span className="metric-value">
-										{helpers.formatDownloadCount(
-											typeof downloads === "string"
-												? Number.parseInt(downloads)
-												: downloads,
-										)}
-									</span>
-									<span>{strings.downloads}</span>
-								</div>
-								<div className="metric">
-									<i className="icon favorite"></i>
-									<span
-										className={`rating-value ${rating === "unrated" ? "" : rating.replace("%", "") >= 80 ? "rating-high" : rating.replace("%", "") >= 50 ? "rating-medium" : "rating-low"}`}
-									>
-										{rating}
-									</span>
-								</div>
-								<div
-									className="metric"
-									onclick={showReviews.bind(null, id, author)}
+					{votesUp !== undefined ? (
+						<div className="metrics-row">
+							<div className="metric">
+								<span className="icon save_alt"></span>
+								<span className="metric-value">
+									{helpers.formatDownloadCount(
+										typeof downloads === "string"
+											? Number.parseInt(downloads)
+											: downloads,
+									)}
+								</span>
+								<span>{strings.downloads}</span>
+							</div>
+							<div className="metric">
+								<i className="icon like-solid"></i>
+								<span
+									className={`rating-value ${rating === "unrated" ? "" : rating.replace("%", "") >= 80 ? "rating-high" : rating.replace("%", "") >= 50 ? "rating-medium" : "rating-low"}`}
 								>
-									<i className="icon chat_bubble"></i>
-									<span className="metric-value">{commentCount}</span>
-									<span>{strings.reviews}</span>
-								</div>
+									{rating}
+								</span>
 							</div>
-						: null}
-					{Array.isArray(keywords) && keywords.length
-						? <div className="keywords">
-								{keywords.map((keyword) => (
-									<span className="keyword">{keyword}</span>
-								))}
+							<div
+								className="metric"
+								onclick={showReviews.bind(null, id, author)}
+							>
+								<i className="icon chat_bubble"></i>
+								<span className="metric-value">{commentCount}</span>
+								<span>{strings.reviews}</span>
 							</div>
-						: null}
+						</div>
+					) : null}
+					{showEditorSupportWarning ? (
+						<LegacyEditorWarning unsupportedEditor={unsupportedEditor} />
+					) : null}
 				</div>
 				<div className="action-buttons">
 					<Buttons {...props} />
+					{!helpers.shouldAllowExternalPurchase() && (
+						<small className="info">
+							<span className="icon info" />
+							{strings["iap-plugin-purchase-warning"]}
+						</small>
+					)}
 				</div>
 				<MoreInfo {...props} />
 			</div>
@@ -195,11 +201,18 @@ export default (props) => {
 					</span>
 				</div>
 				<div className="tab-content">
-					<div
-						id="overview"
-						className="content-section active md"
-						innerHTML={DOMPurify.sanitize(body, { FORBID_TAGS: ["style"] })}
-					></div>
+					<div id="overview" className="content-section active md">
+						{Array.isArray(keywords) && keywords.length ? (
+							<div className="keywords">
+								{keywords.map((keyword) => (
+									<span className="keyword">{keyword}</span>
+								))}
+							</div>
+						) : null}
+						<section
+							innerHTML={DOMPurify.sanitize(body, { FORBID_TAGS: ["style"] })}
+						/>
+					</div>
 					<div id="contributors" className="content-section">
 						{(() => {
 							let contributorsList = contributors?.length
@@ -210,7 +223,7 @@ export default (props) => {
 								: [{ name: author, role: "Developer", github: authorGithub }];
 
 							return contributorsList.map(({ name, role, github }) => {
-								let dp = Url.join(constants.API_BASE, `../user.png`);
+								let dp = Url.join(config.API_BASE, `../user.png`);
 								if (github) {
 									dp = `https://avatars.githubusercontent.com/${github}`;
 								}
@@ -270,18 +283,21 @@ function handleTabClick(e) {
 	document.getElementById(tabId).classList.add("active");
 }
 
-function Buttons({
-	name,
-	isPaid,
-	installed,
-	update,
-	install,
-	uninstall,
-	purchased,
-	price,
-	buy,
-	minVersionCode,
-}) {
+async function Buttons(props) {
+	const {
+		id,
+		name,
+		isPaid,
+		installed,
+		update,
+		install,
+		uninstall,
+		purchased,
+		price,
+		buy,
+		minVersionCode,
+	} = props;
+
 	if (
 		typeof minVersionCode === "number" &&
 		minVersionCode > BuildInfo.versionCode
@@ -289,7 +305,7 @@ function Buttons({
 		return (
 			<div className="error">
 				<span className="icon info"></span>
-				<a href={constants.PLAY_STORE_URL} className="text">
+				<a href={config.PLAY_STORE_URL} className="text">
 					{strings["plugin min version"]
 						.replace("{name}", name)
 						.replace("{v-code}", minVersionCode)}
@@ -330,10 +346,34 @@ function Buttons({
 		);
 	}
 
+	const user = await auth.getLoggedInUser();
+	if (isPaid && helpers.shouldAllowExternalPurchase() && !user) {
+		const buttonRef = Ref();
+		return (
+			<button
+				ref={buttonRef}
+				data-type="info"
+				className="btn btn-install"
+				onclick={async () => {
+					try {
+						await auth.login();
+						const newButton = await Buttons(props);
+						buttonRef.el.replaceWith(newButton);
+					} catch (error) {
+						helpers.error(error);
+					}
+				}}
+			>
+				<i className="icon user-round"></i>
+				{strings.login}
+			</button>
+		);
+	}
+
 	if (isPaid && !purchased && price) {
 		return (
 			<button data-type="buy" className="btn btn-install" onclick={buy}>
-				<i className="licons cart"></i>
+				<i className="icon cart"></i>
 				{price}
 			</button>
 		);
@@ -356,6 +396,19 @@ function Buttons({
 			<i className="icon save_alt"></i>
 			{strings.install}
 		</button>
+	);
+}
+
+function LegacyEditorWarning({ unsupportedEditor }) {
+	const oldEditor =
+		unsupportedEditor === "ace" ? "Ace" : unsupportedEditor || "the old editor";
+	return (
+		<div className="legacy-editor-warning">
+			<span className="icon info"></span>
+			<span>
+				{`Built for older Acode versions powered by ${oldEditor}. Install with caution; some features may behave unexpectedly in the current CodeMirror version.`}
+			</span>
+		</div>
 	);
 }
 
@@ -413,7 +466,7 @@ async function showReviews(pluginId, author) {
 			<div className="write-review">
 				<a
 					style={{ textDecoration: "none", display: "flex" }}
-					href={Url.join(constants.API_BASE, `../plugin/${pluginId}/comments`)}
+					href={Url.join(config.API_BASE, `../plugin/${pluginId}/comments`)}
 				>
 					<span className="icon edit"></span>
 					<span className="title">Review</span>
@@ -425,7 +478,7 @@ async function showReviews(pluginId, author) {
 
 	try {
 		const reviews = await fsOperation(
-			constants.API_BASE,
+			config.API_BASE,
 			`/comments/${pluginId}`,
 		).readFile("json");
 		if (!reviews.length) {
@@ -500,7 +553,7 @@ function Review({
 	author,
 	author_reply: authorReply,
 }) {
-	let dp = Url.join(constants.API_BASE, `../user.png`);
+	let dp = Url.join(config.API_BASE, `../user.png`);
 	let voteImage = Ref();
 	let review = Ref();
 
@@ -509,9 +562,9 @@ function Review({
 	}
 
 	if (vote === 1) {
-		voteImage.style.backgroundImage = `url(${Url.join(constants.API_BASE, `../thumbs-up.gif`)})`;
+		voteImage.style.backgroundImage = `url(${Url.join(config.API_BASE, `../thumbs-up.gif`)})`;
 	} else if (vote === -1) {
-		voteImage.style.backgroundImage = `url(${Url.join(constants.API_BASE, `../thumbs-down.gif`)})`;
+		voteImage.style.backgroundImage = `url(${Url.join(config.API_BASE, `../thumbs-down.gif`)})`;
 	}
 
 	if (authorReply) {

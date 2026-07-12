@@ -1,10 +1,12 @@
 import fsOperation from "fileSystem";
-import ajax from "@deadlyjack/ajax";
 import { getModeForPath as getCMModeForPath } from "cm/modelist";
 import alert from "dialogs/alert";
 import escapeStringRegexp from "escape-string-regexp";
 import adRewards from "lib/adRewards";
-import constants from "lib/constants";
+import config from "lib/config";
+import { bannerAd, interstitialAd } from "lib/startAd";
+import { isBinaryFile } from "./binaryExtensions";
+import { isPlayStoreInstall } from "./installSource";
 import path from "./Path";
 import Uri from "./Uri";
 import Url from "./Url";
@@ -289,12 +291,16 @@ export default {
 		editorManager.emit("update", "file-delete");
 	},
 	canShowAds() {
-		return Boolean(IS_FREE_VERSION && adRewards.canShowAds());
+		return Boolean(!config.HAS_PRO && adRewards.canShowAds());
 	},
 	async showInterstitialIfReady() {
 		if (!this.canShowAds()) return false;
-		if (await window.iad?.isLoaded()) {
-			window.iad.show();
+		if (
+			typeof interstitialAd?.isLoaded === "function" &&
+			typeof interstitialAd?.show === "function" &&
+			(await interstitialAd?.isLoaded())
+		) {
+			interstitialAd.show();
 			return true;
 		}
 		return false;
@@ -303,13 +309,14 @@ export default {
 	 * Displays ad on the current page
 	 */
 	showAd() {
-		const { ad } = window;
-		if (this.canShowAds() && innerHeight * devicePixelRatio > 600 && ad) {
-			const $page = tag.getAll("wc-page:not(#root)").pop();
-			if ($page) {
-				ad.active = true;
-				ad.show();
-			}
+		if (!this.canShowAds()) return;
+		if (innerHeight * devicePixelRatio <= 600) return;
+		if (!bannerAd || typeof bannerAd.show !== "function") return;
+
+		const $page = tag.getAll("wc-page:not(#root)").pop();
+		if ($page) {
+			bannerAd.active = true;
+			bannerAd.show();
 		}
 	},
 	async toInternalUri(uri) {
@@ -330,8 +337,8 @@ export default {
 	},
 	async checkAPIStatus() {
 		try {
-			const { status } = await ajax.get(Url.join(constants.API_BASE, "status"));
-			return status === "ok";
+			const res = await fetch(Url.join(config.API_BASE, "status"));
+			return res.ok;
 		} catch (error) {
 			window.log("error", error);
 			return false;
@@ -519,58 +526,29 @@ export default {
 
 		return `${trimmedCountStr}${units[index]}`;
 	},
+	normalizeMtime(value) {
+		if (value == null) return null;
+		const time = value instanceof Date ? value.getTime() : Number(value);
+		return Number.isFinite(time) ? time : null;
+	},
+	getStatMtime(stat) {
+		return this.normalizeMtime(
+			stat?.modifiedDate ?? stat?.lastModified ?? stat?.mtime,
+		);
+	},
 	isBinary(file) {
-		// binary file extensions
-		const binaryExtensions = [
-			"exe",
-			"dll",
-			"so",
-			"dylib",
-			"bin",
-			"o",
-			"apk",
-			"aab",
-			"zip",
-			"rar",
-			"7z",
-			"gz",
-			"tar",
-			"tgz",
-			"jpg",
-			"jpeg",
-			"png",
-			"gif",
-			"bmp",
-			"ico",
-			"mp3",
-			"mp4",
-			"wav",
-			"avi",
-			"mov",
-			"dds",
-			"tga",
-			"swf",
-			"ttf",
-			"eot",
-			"otf",
-			"woff",
-			"woff2",
-			"pdf",
-			"doc",
-			"docx",
-			"xls",
-			"xlsx",
-			"class",
-			"pyc",
-			"jar",
-			"war",
-		];
+		return isBinaryFile(file);
+	},
 
-		const extension = Url.basename(file)?.split(".")?.pop()?.toLowerCase();
+	isIapAvailable() {
+		return (
+			typeof iap !== "undefined" &&
+			typeof iap.isIapAvailable === "function" &&
+			iap.isIapAvailable()
+		);
+	},
 
-		if (extension && binaryExtensions.includes(extension)) {
-			return true;
-		}
-		return false;
+	shouldAllowExternalPurchase() {
+		return !this.isIapAvailable() && !isPlayStoreInstall();
 	},
 };

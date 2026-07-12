@@ -11,6 +11,9 @@ const customFontNames = new Set();
 const CUSTOM_FONTS_KEY = "custom_fonts";
 const FONT_FACE_STYLE_ID = "font-face-style";
 const EDITOR_STYLE_ID = "editor-font-style";
+const APP_STYLE_ID = "app-font-style";
+const DEFAULT_EDITOR_FONT = "Roboto Mono";
+const DEFAULT_APP_FONT_STACK = `"Roboto", sans-serif`;
 
 add(
 	"Fira Code",
@@ -187,7 +190,11 @@ function has(name) {
 	return fonts.has(name);
 }
 
-async function setFont(name) {
+function isCustom(name) {
+	return customFontNames.has(name);
+}
+
+async function setEditorFont(name) {
 	loader.showTitleLoader();
 	try {
 		await loadFont(name);
@@ -200,9 +207,32 @@ async function setFont(name) {
   }`;
 	} catch (error) {
 		toast(`${name} font not found`, "error");
-		setFont("Roboto Mono");
+		setEditorFont(DEFAULT_EDITOR_FONT);
 	} finally {
 		loader.removeTitleLoader();
+	}
+}
+
+async function setAppFont(name) {
+	const $style = ensureStyleElement(APP_STYLE_ID);
+
+	if (!name) {
+		$style.textContent = `:root {
+  --app-font-family: ${DEFAULT_APP_FONT_STACK};
+}`;
+		return;
+	}
+
+	try {
+		await loadFont(name);
+		$style.textContent = `:root {
+  --app-font-family: "${name}", ${DEFAULT_APP_FONT_STACK};
+}`;
+	} catch (error) {
+		toast(`${name} font not found`, 3000);
+		$style.textContent = `:root {
+  --app-font-family: ${DEFAULT_APP_FONT_STACK};
+}`;
 	}
 }
 
@@ -222,6 +252,23 @@ async function downloadFont(name, link) {
 	await fsOperation(FONT_DIR).createFile(name, font);
 
 	return FONT_FILE;
+}
+
+function injectFontFace(name) {
+	const $style = ensureStyleElement(FONT_FACE_STYLE_ID);
+	const css = get(name);
+
+	if (!css) return;
+
+	// Inject CSS if not already present (skip remote URL downloads - loadFont handles those)
+	if (!$style.textContent.includes(`font-family: '${name}'`)) {
+		$style.textContent = `${$style.textContent}\n${css}`;
+	}
+
+	// Kick off browser font loading without blocking
+	if (document.fonts?.load) {
+		document.fonts.load(`12px '${name}'`).catch(() => {});
+	}
 }
 
 async function loadFont(name) {
@@ -244,9 +291,28 @@ async function loadFont(name) {
 		css = css.replace(url, internalUrl);
 	}
 
-	// Add font face to document if not already present
-	if (!$style.textContent.includes(`font-family: '${name}'`)) {
+	// Replace any pre-injected @font-face block (from injectFontFace)
+	// with the locally-cached version, or append if not yet present
+	if ($style.textContent.includes(`font-family: '${name}'`)) {
+		let escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		$style.textContent = $style.textContent.replace(
+			new RegExp(
+				`@font-face\\s*\\{[^}]*font-family:\\s*'${escapedName}'[^}]*\\}`,
+				"g",
+			),
+			css,
+		);
+	} else {
 		$style.textContent = `${$style.textContent}\n${css}`;
+	}
+
+	// Ensure the browser has actually parsed and loaded the font
+	if (document.fonts?.load) {
+		try {
+			await document.fonts.load(`12px '${name}'`);
+		} catch {
+			// document.fonts.load may reject if font is unavailable
+		}
 	}
 
 	return css;
@@ -268,6 +334,10 @@ export default {
 	getNames,
 	remove,
 	has,
-	setFont,
+	isCustom,
+	setFont: setEditorFont,
+	setEditorFont,
+	setAppFont,
 	loadFont,
+	injectFontFace,
 };

@@ -3,14 +3,14 @@ let $apps;
 /**@type {HTMLElement} */
 let $sidebar;
 /**@type {HTMLElement} */
-let $contaienr;
+let $container;
 
 export default class SidebarApp {
 	/**@type {HTMLSpanElement} */
 	#icon;
 	/**@type {string} */
 	#id;
-	/**@type {string} */
+	/**@type {(el:HTMLElement)=>(void|Function)} */
 	#init;
 	/**@type {string} */
 	#title;
@@ -18,6 +18,8 @@ export default class SidebarApp {
 	#active;
 	/**@type {(el:HTMLElement)=>void} */
 	#onselect;
+	/**@type {Function|null} */
+	#cleanup = null;
 	/**@type {HTMLElement} */
 	#container;
 
@@ -26,7 +28,7 @@ export default class SidebarApp {
 	 * @param {string} icon
 	 * @param {string} id
 	 * @param {string} title
-	 * @param {(el:HTMLElement)=>void} init
+	 * @param {(el:HTMLElement)=>(void|Function)} init
 	 * @param {(el:HTMLElement)=>void} onselect
 	 */
 	constructor(icon, id, title, init, onselect) {
@@ -37,7 +39,10 @@ export default class SidebarApp {
 		this.#title = title;
 		this.#init = init || emptyFunc;
 		this.#onselect = onselect || emptyFunc;
-		this.#init(this.#container);
+		const cleanup = this.#init(this.#container);
+		if (typeof cleanup === "function") {
+			this.#cleanup = cleanup;
+		}
 	}
 
 	/**
@@ -96,14 +101,14 @@ export default class SidebarApp {
 			// Try to replace the old container, or append if it's not in the DOM
 			try {
 				if (oldContainer && oldContainer.parentNode === $sidebar) {
-					$sidebar.replaceChild($contaienr, oldContainer);
+					$sidebar.replaceChild($container, oldContainer);
 				} else {
 					// Old container not in sidebar, just append the new one
 					const existingContainer = $sidebar.get(".container");
 					if (existingContainer) {
-						$sidebar.replaceChild($contaienr, existingContainer);
+						$sidebar.replaceChild($container, existingContainer);
 					} else {
-						$sidebar.appendChild($contaienr);
+						$sidebar.appendChild($container);
 					}
 				}
 			} catch (error) {
@@ -113,7 +118,7 @@ export default class SidebarApp {
 				if (existingContainer) {
 					existingContainer.remove();
 				}
-				$sidebar.appendChild($contaienr);
+				$sidebar.appendChild($container);
 			}
 			this.#onselect(this.#container);
 		}
@@ -135,6 +140,8 @@ export default class SidebarApp {
 	}
 
 	remove() {
+		this.#cleanup?.();
+		this.#cleanup = null;
 		if (this.#icon) {
 			this.#icon.remove();
 			this.#icon = null;
@@ -171,10 +178,10 @@ function Icon({ icon, id, title }) {
  * @returns {HTMLElement}
  */
 function getContainer($el) {
-	const res = $contaienr;
+	const res = $container;
 
 	if ($el) {
-		$contaienr = $el;
+		$container = $el;
 	}
 
 	return res || $sidebar.get(".container");

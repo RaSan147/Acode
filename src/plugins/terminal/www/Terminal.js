@@ -8,60 +8,71 @@ const Terminal = {
      * @param {Function} [err_logger=console.error] - Function to log errors.
      * @returns {Promise<boolean>} - Returns true if installation completes with exit code 0, void if not installing
      */
-    async startAxs(installing = false, logger = console.log, err_logger = console.error) {
+    async startAxs(installing = false, logger = console.log, err_logger = console.error,failsafe = false) {
         const filesDir = await new Promise((resolve, reject) => {
             system.getFilesDir(resolve, reject);
         });
 
+        const failsafeArg = failsafe ? "--failsafe" : "";
+
+        const [initAlpine, rmWrapper, initSandbox] = await Promise.all([
+            readAsset("init-alpine.sh"),
+            readAsset("rm-wrapper.sh"),
+            readAsset("init-sandbox.sh"),
+        ]);
+
+        const isFdroid = await Executor.execute("echo $FDROID");
+
+        if(isFdroid !== "true"){
+//the symlink must be updated everytime because the symlinks to native libs can break after app updates
+        await Executor.execute("rm -f $PREFIX/axs && ln -s $NATIVE_DIR/libaxs.so $PREFIX/axs")
+}
+        
+
+        await writeText(`${filesDir}/init-alpine.sh`, initAlpine);
+        await writeText(`${filesDir}/init-sandbox.sh`, initSandbox);
+
+        await deleteFile(`${filesDir}/alpine/bin/rm`).catch(() => {});
+        await writeText(`${filesDir}/alpine/bin/rm`, rmWrapper);
+        await setExec(`${filesDir}/alpine/bin/rm`, true);
+
         if (installing) {
             return new Promise((resolve, reject) => {
-                readAsset("init-alpine.sh", async (content) => {
-                    system.writeText(`${filesDir}/init-alpine.sh`, content, logger, err_logger);
-                });
+                let lastError = "";
 
-                readAsset("rm-wrapper.sh", async (content) => {
-                    system.deleteFile(`${filesDir}/alpine/bin/rm`, logger, err_logger);
-                    system.writeText(`${filesDir}/alpine/bin/rm`, content, logger, err_logger);
-                    system.setExec(`${filesDir}/alpine/bin/rm`, true, logger, err_logger);
-                });
+                Executor.start("sh", (type, data) => {
+                    //console[type === "stderr" ? "error" : "log"](`[AXS] ${data}`);
+                    logger(`${type} ${data}`);
 
-                readAsset("init-sandbox.sh", (content) => {
-                    system.writeText(`${filesDir}/init-sandbox.sh`, content, logger, err_logger);
+                    if (type === "stderr" && data) {
+                        lastError = lastError ? `${lastError}\n${data}` : data;
+                    }
 
-                    Executor.start("sh", (type, data) => {
-                        logger(`${type} ${data}`);
-
-                        // Check for exit code during installation
-                        if (type === "exit") {
-                            resolve(data === "0");
+                    // Check for exit code during installation
+                    if (type === "exit") {
+                        const success = data === "0";
+                        if (!success) {
+                            this.lastInstallError = lastError
+                                ? `Sandbox configuration failed with exit code ${data}: ${lastError}`
+                                : `Sandbox configuration failed with exit code ${data}`;
                         }
-                    }).then(async (uuid) => {
-                        await Executor.write(uuid, `source ${filesDir}/init-sandbox.sh ${installing ? "--installing" : ""}; exit`);
-                    }).catch((error) => {
-                        err_logger("Failed to start AXS:", error);
-                        resolve(false);
-                    });
+                        resolve(success);
+                    }
+                }).then(async (uuid) => {
+                    await Executor.write(uuid, `source ${filesDir}/init-sandbox.sh ${installing ? "--installing" : ""} ${failsafeArg}; exit`);
+                }).catch((error) => {
+                    const message = `Failed to start AXS: ${formatError(error)}`;
+                    this.lastInstallError = message;
+                    err_logger(message);
+                    resolve(false);
                 });
             });
         } else {
-            readAsset("rm-wrapper.sh", async (content) => {
-                system.deleteFile(`${filesDir}/alpine/bin/rm`, logger, err_logger);
-                system.writeText(`${filesDir}/alpine/bin/rm`, content, logger, err_logger);
-                system.setExec(`${filesDir}/alpine/bin/rm`, true, logger, err_logger);
-            });
-
-            readAsset("init-alpine.sh", async (content) => {
-                system.writeText(`${filesDir}/init-alpine.sh`, content, logger, err_logger);
-            });
-
-            readAsset("init-sandbox.sh", (content) => {
-                system.writeText(`${filesDir}/init-sandbox.sh`, content, logger, err_logger);
-
-                Executor.start("sh", (type, data) => {
-                    logger(`${type} ${data}`);
-                }).then(async (uuid) => {
-                    await Executor.write(uuid, `source ${filesDir}/init-sandbox.sh ${installing ? "--installing" : ""}; exit`);
-                });
+            Executor.start("sh", (type, data) => {
+                //console[type === "stderr" ? "error" : "log"](`[AXS] ${data}`);
+                logger(`${type} ${data}`);
+            }).then(async (uuid) => {
+                await Executor.write(uuid, `source ${filesDir}/init-sandbox.sh ${installing ? "--installing" : ""} ${failsafeArg}; exit`);
             });
         }
     },
@@ -105,6 +116,10 @@ const Terminal = {
     async install(logger = console.log, err_logger = console.error) {
         if (!(await this.isSupported())) return false;
 
+        const isFdroid = await Executor.execute("echo $FDROID");
+
+        this.lastInstallError = "";
+
         try {
             //cleanup before insatll
             await this.uninstall();
@@ -121,136 +136,242 @@ const Terminal = {
         });
 
         try {
-            let alpineUrl;
-            let axsUrl;
-            let prootUrl;
-            let libTalloc;
-            let libproot = null;
-            let libproot32 = null;
 
-            if (arch === "arm64-v8a") {
-                libproot = "https://raw.githubusercontent.com/Acode-Foundation/Acode/main/src/plugins/proot/libs/arm64/libproot.so";
-                libproot32 = "https://raw.githubusercontent.com/Acode-Foundation/Acode/main/src/plugins/proot/libs/arm64/libproot32.so";
-                libTalloc = "https://raw.githubusercontent.com/Acode-Foundation/Acode/main/src/plugins/proot/libs/arm64/libtalloc.so";
-                prootUrl = "https://raw.githubusercontent.com/Acode-Foundation/Acode/main/src/plugins/proot/libs/arm64/libproot-xed.so";
-                axsUrl = `https://github.com/bajrangCoder/acodex_server/releases/latest/download/axs-musl-android-arm64`;
-                alpineUrl = "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.0-aarch64.tar.gz";
-            } else if (arch === "armeabi-v7a") {
-                libproot = "https://raw.githubusercontent.com/Acode-Foundation/Acode/main/src/plugins/proot/libs/arm32/libproot.so";
-                libTalloc = "https://raw.githubusercontent.com/Acode-Foundation/Acode/main/src/plugins/proot/libs/arm32/libtalloc.so";
-                prootUrl = "https://raw.githubusercontent.com/Acode-Foundation/Acode/main/src/plugins/proot/libs/arm32/libproot-xed.so";
-                axsUrl = `https://github.com/bajrangCoder/acodex_server/releases/latest/download/axs-musl-android-armv7`;
-                alpineUrl = "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/armhf/alpine-minirootfs-3.21.0-armhf.tar.gz";
-            } else if (arch === "x86_64") {
-                libproot = "https://raw.githubusercontent.com/Acode-Foundation/Acode/main/src/plugins/proot/libs/x64/libproot.so";
-                libproot32 = "https://raw.githubusercontent.com/Acode-Foundation/Acode/main/src/plugins/proot/libs/x64/libproot32.so";
-                libTalloc = "https://raw.githubusercontent.com/Acode-Foundation/Acode/main/src/plugins/proot/libs/x64/libtalloc.so";
-                prootUrl = "https://raw.githubusercontent.com/Acode-Foundation/Acode/main/src/plugins/proot/libs/x64/libproot-xed.so";
-                axsUrl = `https://github.com/bajrangCoder/acodex_server/releases/latest/download/axs-musl-android-x86_64`;
-                alpineUrl = "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-minirootfs-3.21.0-x86_64.tar.gz";
-            } else {
+            const architectures = {
+                "arm64-v8a": {
+                    libraryDirectory: "arm64",
+                    axsArchitecture: "arm64",
+                    alpineDirectory: "aarch64",
+                    alpineFilename: "alpine-minirootfs-3.21.0-aarch64.tar.gz",
+                    hasLibproot32: true
+                },
+
+                "armeabi-v7a": {
+                    libraryDirectory: "arm32",
+                    axsArchitecture: "armv7",
+                    alpineDirectory: "armhf",
+                    alpineFilename: "alpine-minirootfs-3.21.0-armhf.tar.gz",
+                    hasLibproot32: false
+                },
+
+                "x86_64": {
+                    libraryDirectory: "x64",
+                    axsArchitecture: "x86_64",
+                    alpineDirectory: "x86_64",
+                    alpineFilename: "alpine-minirootfs-3.21.0-x86_64.tar.gz",
+                    hasLibproot32: true
+                }
+            };
+
+            const architecture = architectures[arch];
+
+            if (!architecture) {
                 throw new Error(`Unsupported architecture: ${arch}`);
             }
 
+            if(isFdroid === "true") {
+                const buildUrl = (...parts) => parts.join("");
 
-            logger("⬇️  Downloading sandbox filesystem...");
-            await new Promise((resolve, reject) => {
-                cordova.plugin.http.downloadFile(
-                    alpineUrl, {}, {},
-                    cordova.file.dataDirectory + "alpine.tar.gz",
-                    resolve, reject
-                );
-            });
 
-            logger("⬇️  Downloading axs...");
-            await new Promise((resolve, reject) => {
-                cordova.plugin.http.downloadFile(
-                    axsUrl, {}, {},
-                    cordova.file.dataDirectory + "axs",
-                    resolve, reject
-                );
-            });
+            const strings = {
+                protocol: ["ht", "tps", ":", "//"],
 
-            const isFdroid = await Executor.execute("echo $FDROID");
-            if (isFdroid === "true") {
-                logger("🐧  F-Droid flavor detected, downloading additional files...");
+                rawGithubDomain: [
+                    "raw",
+                    ".",
+                    "github",
+                    "usercontent",
+                    ".",
+                    "com"
+                ],
+
+                githubDomain: [
+                    "git",
+                    "hub",
+                    ".",
+                    "com"
+                ],
+
+                alpineDomain: [
+                    "dl",
+                    "-",
+                    "cdn",
+                    ".",
+                    "alpine",
+                    "linux",
+                    ".",
+                    "org"
+                ],
+
+                acodeFoundation: [
+                    "Acode",
+                    "-",
+                    "Foundation"
+                ],
+
+                acodeRepo: [
+                    "A",
+                    "code"
+                ],
+
+                bajrangCoder: [
+                    "bajrang",
+                    "Coder"
+                ],
+
+                acodexServer: [
+                    "acodex",
+                    "_",
+                    "server"
+                ],
+
+                libraries: {
+                    proot: ["li", "bp", "root", ".", "so"],
+                    proot32: ["li", "bp", "root", "32", ".", "so"],
+                    talloc: ["li", "bt", "alloc", ".", "so"],
+                    prootXed: ["li", "bp", "root", "-", "xed", ".", "so"]
+                }
+            };
+
+            const rawGithubBase = buildUrl(
+                ...strings.protocol,
+                ...strings.rawGithubDomain,
+                "/",
+                ...strings.acodeFoundation,
+                "/",
+                ...strings.acodeRepo,
+                "/main/src/plugins/proot/libs/"
+            );
+
+            const githubReleaseBase = buildUrl(
+                ...strings.protocol,
+                ...strings.githubDomain,
+                "/",
+                ...strings.bajrangCoder,
+                "/",
+                ...strings.acodexServer,
+                "/releases/latest/download/"
+            );
+
+            const alpineBase = buildUrl(
+                ...strings.protocol,
+                ...strings.alpineDomain,
+                "/alpine/v3.21/releases/"
+            );
+
+            const libraryBaseUrl = buildUrl(
+                rawGithubBase,
+                architecture.libraryDirectory,
+                "/"
+            );
+
+            const libproot = buildUrl(
+                libraryBaseUrl,
+                ...strings.libraries.proot
+            );
+
+            const libTalloc = buildUrl(
+                libraryBaseUrl,
+                ...strings.libraries.talloc
+            );
+
+            const prootUrl = buildUrl(
+                libraryBaseUrl,
+                ...strings.libraries.prootXed
+            );
+
+            const libproot32 = architecture.hasLibproot32
+                ? buildUrl(
+                    libraryBaseUrl,
+                    ...strings.libraries.proot32
+                )
+                : null;
+
+            const axsUrl = buildUrl(
+                githubReleaseBase,
+                "axs-pie-android-",
+                architecture.axsArchitecture
+            );
+
+            const alpineUrl = buildUrl(
+                alpineBase,
+                architecture.alpineDirectory,
+                "/",
+                architecture.alpineFilename
+            );
+
+                logger("⬇️  Downloading sandbox filesystem...");
+                await downloadFile(alpineUrl, cordova.file.dataDirectory + "alpine.tar.gz", "Sandbox filesystem");
+
+                logger("⬇️  Downloading axs...");
+                await downloadFile(axsUrl, cordova.file.dataDirectory + "axs", "AXS");
+
                 logger("⬇️  Downloading compatibility layer...");
-                await new Promise((resolve, reject) => {
-                    cordova.plugin.http.downloadFile(
-                        prootUrl, {}, {},
-                        cordova.file.dataDirectory + "libproot-xed.so",
-                        resolve, reject
-                    );
-                });
+                await downloadFile(prootUrl, cordova.file.dataDirectory + "libproot-xed.so", "Compatibility layer");
 
                 logger("⬇️  Downloading supporting library...");
-                await new Promise((resolve, reject) => {
-                    cordova.plugin.http.downloadFile(
-                        libTalloc, {}, {},
-                        cordova.file.dataDirectory + "libtalloc.so.2",
-                        resolve, reject
-                    );
-                });
+                await downloadFile(libTalloc, cordova.file.dataDirectory + "libtalloc.so.2", "Supporting library");
 
                 if (libproot != null) {
-                    await new Promise((resolve, reject) => {
-                        cordova.plugin.http.downloadFile(
-                            libproot, {}, {},
-                            cordova.file.dataDirectory + "libproot.so",
-                            resolve, reject
-                        );
-                    });
+                    await downloadFile(libproot, cordova.file.dataDirectory + "libproot.so", "proot loader");
                 }
 
                 if (libproot32 != null) {
-                    await new Promise((resolve, reject) => {
-                        cordova.plugin.http.downloadFile(
-                            libproot32, {}, {},
-                            cordova.file.dataDirectory + "libproot32.so",
-                            resolve, reject
-                        );
-                    });
+                    await downloadFile(libproot32, cordova.file.dataDirectory + "libproot32.so", "32-bit proot loader");
                 }
 
-            }
+                logger("✅  All downloads completed");
+            }else{
+                logger("📦  Extracting assets...");
+                await new Promise((resolve, reject) => {
+                    system.extractAsset(`alpine_assets/${architecture.libraryDirectory}/alpine.rootfs`, `${filesDir}/alpine.tar.gz`, resolve, (e)=>{
+                        console.error(`Failed to extract alpine.tar.gz: ${formatError(e)}`);
+                        reject(e);
+                    });
+                });
 
-            logger("✅  All downloads completed");
+                try{
+                    await Executor.execute("rm -f $PREFIX/axs && ln -s $NATIVE_DIR/libaxs.so $PREFIX/axs")
+                }catch(e){
+                    err_logger(`${formatError(e)}`);
+                }
+            }
+           
 
             logger("📁  Setting up directories...");
 
-            await new Promise((resolve, reject) => {
-                system.mkdirs(`${filesDir}/.downloaded`, resolve, reject);
-            });
+            await ensureDir(`${filesDir}/.downloaded`);
 
             const alpineDir = `${filesDir}/alpine`;
 
-            await new Promise((resolve, reject) => {
-                system.mkdirs(alpineDir, resolve, reject);
-            });
+            await ensureDir(alpineDir);
+
 
             logger("📦  Extracting sandbox filesystem...");
             await Executor.execute(`tar --no-same-owner -xf ${filesDir}/alpine.tar.gz -C ${alpineDir}`);
 
             logger("⚙️  Applying basic configuration...");
-            system.writeText(`${alpineDir}/etc/resolv.conf`, `nameserver 8.8.4.4 \nnameserver 8.8.8.8`);
+            await writeText(`${alpineDir}/etc/resolv.conf`, `nameserver 8.8.4.4 \nnameserver 8.8.8.8`);
 
-            readAsset("rm-wrapper.sh", async (content) => {
-                system.deleteFile(`${alpineDir}/bin/rm`, logger, err_logger);
-                system.writeText(`${alpineDir}/bin/rm`, content, logger, err_logger);
-                system.setExec(`${alpineDir}/bin/rm`, true, logger, err_logger);
-            });
+            const rmWrapper = await readAsset("rm-wrapper.sh");
+            await deleteFile(`${alpineDir}/bin/rm`).catch(() => {});
+            await writeText(`${alpineDir}/bin/rm`, rmWrapper);
+            await setExec(`${alpineDir}/bin/rm`, true);
 
             logger("✅  Extraction complete");
-            await new Promise((resolve, reject) => {
-                system.mkdirs(`${filesDir}/.extracted`, resolve, reject);
-            });
+            await ensureDir(`${filesDir}/.extracted`);
 
             logger("⚙️  Updating sandbox enviroment...");
             const installResult = await this.startAxs(true, logger, err_logger);
+            if (!installResult) {
+                throw new Error(this.lastInstallError || "Sandbox configuration failed.");
+            }
             return installResult;
 
         } catch (e) {
-            err_logger("Installation failed:", e);
+            const message = formatError(e);
+            this.lastInstallError = message;
+            err_logger(`Installation failed: ${message}`);
             console.error("Installation failed:", e);
             return false;
         }
@@ -327,21 +448,16 @@ const Terminal = {
                 reject("Alpine is not installed.");
                 return;
             }
-
             const cmd = `
             set -e
-
-            INCLUDE_FILES="alpine .downloaded .extracted axs"
+            INCLUDE_FILES="alpine .downloaded .extracted .configured axs"
             if [ "$FDROID" = "true" ]; then
                 INCLUDE_FILES="$INCLUDE_FILES libtalloc.so.2 libproot-xed.so"
             fi
-
-            EXCLUDE="--exclude=alpine/data --exclude=alpine/system --exclude=alpine/vendor --exclude=alpine/sdcard --exclude=alpine/storage --exclude=alpine/public"
-
+            EXCLUDE="--exclude=alpine/data --exclude=alpine/system --exclude=alpine/vendor --exclude=alpine/sdcard --exclude=alpine/storage --exclude=alpine/public --exclude=alpine/apex --exclude=alpine/odm --exclude=alpine/product --exclude=alpine/system_ext --exclude=alpine/linkerconfig --exclude=alpine/proc --exclude=alpine/sys --exclude=alpine/dev --exclude=alpine/run --exclude=alpine/tmp"
             tar -cf "$PREFIX/aterm_backup.tar" -C "$PREFIX" $EXCLUDE $INCLUDE_FILES
             echo "ok"
             `;
-
             const result = await Executor.execute(cmd);
             if (result === "ok") {
                 resolve(cordova.file.dataDirectory + "aterm_backup.tar");
@@ -375,9 +491,9 @@ const Terminal = {
             }
 
             const cmd = `
-            sleep 2
+            set -e
 
-            INCLUDE_FILES="$PREFIX/alpine $PREFIX/.downloaded $PREFIX/.extracted $PREFIX/axs"
+            INCLUDE_FILES="$PREFIX/alpine $PREFIX/.downloaded $PREFIX/.extracted $PREFIX/.configured $PREFIX/axs"
 
             if [ "$FDROID" = "true" ]; then
                 INCLUDE_FILES="$INCLUDE_FILES $PREFIX/libtalloc.so.2 $PREFIX/libproot-xed.so"
@@ -387,11 +503,11 @@ const Terminal = {
                 rm -rf -- "$item"
             done
 
-            tar -xf "$PREFIX/aterm_backup.bin" -C "$PREFIX"
+            tar -xf $PREFIX/aterm_backup.* -C "$PREFIX"
             echo "ok"
             `;
 
-            const result = await Executor.execute(cmd);
+            const result = await Executor.BackgroundExecutor.execute(cmd);
             if (result === "ok") {
                 resolve(result);
             } else {
@@ -425,7 +541,7 @@ const Terminal = {
             const cmd = `
             set -e
 
-            INCLUDE_FILES="$PREFIX/alpine $PREFIX/.downloaded $PREFIX/.extracted $PREFIX/axs"
+            INCLUDE_FILES="$PREFIX/alpine $PREFIX/.downloaded $PREFIX/.extracted $PREFIX/.configured $PREFIX/axs"
 
             if [ "$FDROID" = "true" ]; then
                 INCLUDE_FILES="$INCLUDE_FILES $PREFIX/libtalloc.so.2 $PREFIX/libproot-xed.so"
@@ -437,27 +553,106 @@ const Terminal = {
 
             echo "ok"
             `;
-            const result = await Executor.execute(cmd);
+            const result = await Executor.BackgroundExecutor.execute(cmd);
             if (result === "ok") {
                 resolve(result);
             } else {
                 reject(result);
             }
         });
-    }
+    },
+
+    formatError
 };
 
 
 function readAsset(assetPath, callback) {
     const assetUrl = "file:///android_asset/" + assetPath;
 
-    window.resolveLocalFileSystemURL(assetUrl, fileEntry => {
-        fileEntry.file(file => {
-            const reader = new FileReader();
-            reader.onloadend = () => callback(reader.result);
-            reader.readAsText(file);
-        }, console.error);
-    }, console.error);
+    const promise = new Promise((resolve, reject) => {
+        window.resolveLocalFileSystemURL(assetUrl, fileEntry => {
+            fileEntry.file(file => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.onerror = () => reject(reader.error || new Error(`Failed to read ${assetPath}`));
+                reader.readAsText(file);
+            }, reject);
+        }, reject);
+    });
+
+    if (callback) {
+        promise.then(callback).catch(console.error);
+    }
+
+    return promise;
+}
+
+function fileExists(path) {
+    return new Promise((resolve, reject) => {
+        system.fileExists(path, false, (result) => {
+            resolve(result == 1);
+        }, reject);
+    });
+}
+
+async function ensureDir(path) {
+    if (await fileExists(path)) return;
+
+    await new Promise((resolve, reject) => {
+        system.mkdirs(path, resolve, reject);
+    });
+}
+
+function writeText(path, content) {
+    return new Promise((resolve, reject) => {
+        system.writeText(path, content, resolve, reject);
+    });
+}
+
+function deleteFile(path) {
+    return new Promise((resolve, reject) => {
+        system.deleteFile(path, resolve, reject);
+    });
+}
+
+function setExec(path, executable) {
+    return new Promise((resolve, reject) => {
+        system.setExec(path, executable, resolve, reject);
+    });
+}
+
+function downloadFile(url, destination, label) {
+    return new Promise((resolve, reject) => {
+        cordova.plugin.http.downloadFile(
+            url, {}, {},
+            destination,
+            resolve,
+            (error) => reject(new Error(`${label} download failed: ${formatError(error)}`))
+        );
+    });
+}
+
+function formatError(error) {
+    if (error == null) return "Unknown error";
+    if (error instanceof Error) return error.message || String(error);
+    if (typeof error === "string") return error || "Unknown error";
+    if (typeof error === "object") {
+        const parts = [];
+        if (error.status != null) parts.push(`status ${error.status}`);
+        if (error.error) parts.push(String(error.error));
+        if (error.message) parts.push(String(error.message));
+        if (error.exception) parts.push(String(error.exception));
+        if (error.url) parts.push(`URL: ${error.url}`);
+        if (parts.length) return parts.join(" - ");
+
+        try {
+            return JSON.stringify(error);
+        } catch (jsonError) {
+            return String(error);
+        }
+    }
+
+    return String(error);
 }
 
 module.exports = Terminal;

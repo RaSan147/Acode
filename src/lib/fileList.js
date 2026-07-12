@@ -10,8 +10,10 @@ import settings from "./settings";
  */
 
 const filesTree = {};
+const pendingScans = new Set();
 const events = {
 	"add-file": [],
+	"push-file": [],
 	"remove-file": [],
 	"add-folder": [],
 	"remove-folder": [],
@@ -19,7 +21,7 @@ const events = {
 };
 
 export function initFileList() {
-	if (editorManager?.activeFile.loading) {
+	if (editorManager?.activeFile?.loading) {
 		editorManager.activeFile.on("loadend", initFileList);
 		return;
 	}
@@ -39,7 +41,7 @@ export async function append(parent, child) {
 
 	const childTree = await Tree.create(child);
 	tree.children.push(childTree);
-	getAllFiles(childTree);
+	trackScan(getAllFiles(childTree));
 	emit("add-file", childTree);
 }
 
@@ -49,7 +51,7 @@ export async function append(parent, child) {
  */
 export function remove(item) {
 	if (filesTree[item]) {
-		delete filesTree[item];
+		removeRootTree(item);
 		emit("remove-file", item);
 		return;
 	}
@@ -60,6 +62,15 @@ export function remove(item) {
 	const index = parent.children.indexOf(tree);
 	parent.children.splice(index, 1);
 	emit("remove-file", tree);
+}
+
+function removeRootTree(url) {
+	const rootUrl = url.endsWith("/") ? url : `${url}/`;
+	Object.keys(filesTree).forEach((key) => {
+		if (key === url || key.startsWith(rootUrl)) {
+			delete filesTree[key];
+		}
+	});
 }
 
 /**
@@ -74,11 +85,15 @@ export async function refresh() {
 		addedFolder.map(async ({ url, title }) => {
 			const tree = await Tree.createRoot(url, title);
 			filesTree[url] = tree;
-			getAllFiles(tree);
+			trackScan(getAllFiles(tree));
 		}),
 	);
 
 	emit("refresh", filesTree);
+}
+
+export async function whenReady() {
+	await Promise.all([...pendingScans]);
 }
 
 /**
@@ -103,7 +118,11 @@ export default function files(dir) {
 	const listedDirs = [];
 	let transform = (item) => item;
 	if (typeof dir === "string") {
-		return Object.values(filesTree).find((item) => getFile(dir, item));
+		for (const item of Object.values(filesTree)) {
+			const found = getFile(dir, item);
+			if (found) return found;
+		}
+		return null;
 	} else if (typeof dir === "function") {
 		transform = dir;
 	}
@@ -116,7 +135,7 @@ export default function files(dir) {
 }
 
 /**
- * @typedef {'add-file'|'remove-file'|'add-folder'|'remove-folder'|'refresh'} FileListEvent
+ * @typedef {'add-file'|'push-file'|'remove-file'|'add-folder'|'remove-folder'|'refresh'} FileListEvent
  */
 
 /**
@@ -218,7 +237,7 @@ export async function addRoot({ url, name }) {
 
 		const tree = await Tree.createRoot(url, name);
 		filesTree[url] = tree;
-		getAllFiles(tree);
+		trackScan(getAllFiles(tree, null, { indexContent: false }));
 		emit("add-folder", tree);
 	} catch (error) {
 		// ignore
@@ -233,7 +252,7 @@ export async function addRoot({ url, name }) {
 function onRemoveFolder({ url }) {
 	const tree = filesTree[url];
 	if (!tree) return;
-	delete filesTree[url];
+	removeRootTree(url);
 	emit("remove-folder", tree);
 }
 
@@ -242,9 +261,13 @@ function onRemoveFolder({ url }) {
  * @param {Tree} parent - An array to store files
  * @param {Tree} [root] - Root path
  */
-async function getAllFiles(parent, root) {
+async function getAllFiles(parent, root, options = {}) {
 	root = root || parent.root;
 	if (!parent.children || !root.isConnected) return;
+
+	if (supportsNativeWorkspace(root.url)) {
+		return getAllFilesNative(parent, root, options);
+	}
 
 	try {
 		const entries = await fsOperation(parent.url).lsDir();
@@ -267,8 +290,95 @@ async function getAllFiles(parent, root) {
 			// why not outside? because parent may be removed
 			if (!root.isConnected) return;
 			parent.children.length = 0;
-			getAllFiles(parent);
+			getAllFiles(parent, root, options);
 		}, 3000);
+	}
+}
+
+function supportsNativeWorkspace(url = "") {
+	return (
+		typeof sdcard !== "undefined" &&
+		typeof sdcard.workspaceScan === "function" &&
+		(/^file:/.test(url) || /^content:/.test(url))
+	);
+}
+
+async function getAllFilesNative(parent, root, options = {}) {
+	const id = `scan-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+	return new Promise((resolve, reject) => {
+		let settled = false;
+
+		const finish = (fn, value) => {
+			if (settled) return;
+			settled = true;
+			fn(value);
+		};
+
+		const cancelIfDisconnected = () => {
+			if (root.isConnected) return false;
+			try {
+				sdcard.workspaceCancel(id);
+			} catch (_) {
+				// ignore cancellation failures
+			}
+			finish(resolve);
+			return true;
+		};
+
+		sdcard.workspaceScan(
+			{
+				id,
+				rootUrl: parent.url,
+				title: parent.name,
+				excludeFolders: settings.value.excludeFolders,
+				showHiddenFiles: !!settings.value.fileBrowser?.showHiddenFiles,
+				defaultEncoding: settings.value.defaultFileEncoding,
+				indexContent: !!options.indexContent,
+			},
+			(event) => {
+				if (cancelIfDisconnected()) return;
+				switch (event?.type || event?.action) {
+					case "batch":
+						addNativeEntries(root, event.entries || []);
+						break;
+					case "done":
+						finish(resolve);
+						break;
+					case "error":
+						finish(reject, new Error(event.error || "Native scan failed"));
+						break;
+				}
+			},
+			(error) => {
+				finish(reject, error);
+			},
+		);
+	});
+}
+
+function addNativeEntries(root, entries) {
+	for (const item of entries) {
+		const parentUrl = item.parentUrl || item.parent;
+		const parentTree =
+			parentUrl === root.url ? root : getTree([root], parentUrl);
+		if (!parentTree?.children) continue;
+		if (parentTree.children.find(({ url }) => url === item.url)) continue;
+
+		const file = new Tree(
+			item.name,
+			item.url,
+			item.isDirectory,
+			item.mime || item.type,
+			item.size,
+			item.modifiedDate,
+		);
+		parentTree.children.push(file);
+
+		if (!file.children) {
+			emit("push-file", file);
+			emit("add-file", file);
+		}
 	}
 }
 
@@ -283,6 +393,12 @@ function emit(event, ...args) {
 	list.forEach((fn) => fn(...args));
 }
 
+function trackScan(scan) {
+	pendingScans.add(scan);
+	scan.finally(() => pendingScans.delete(scan));
+	return scan;
+}
+
 /**
  * Create a child tree
  * @param {Tree} parent
@@ -291,13 +407,20 @@ function emit(event, ...args) {
  */
 async function createChildTree(parent, item, root) {
 	if (!root.isConnected) return;
-	const { name, url, isDirectory } = item;
-	const exists = parent.children.findIndex(({ value }) => value === url);
+	const { name, url, isDirectory, mime, type, size, modifiedDate } = item;
+	const exists = parent.children.findIndex((child) => child.url === url);
 	if (exists > -1) {
 		return;
 	}
 
-	const file = await Tree.create(url, name, isDirectory);
+	const file = await Tree.create(
+		url,
+		name,
+		isDirectory,
+		mime || type,
+		size,
+		modifiedDate,
+	);
 	if (!root.isConnected) return;
 
 	const existingTree = getTree(Object.values(filesTree), file.url);
@@ -317,11 +440,12 @@ async function createChildTree(parent, item, root) {
 		);
 		if (ignore) return;
 
-		getAllFiles(file, root);
+		await getAllFiles(file, root);
 		return;
 	}
 
 	emit("push-file", file);
+	emit("add-file", file);
 }
 
 export class Tree {
@@ -345,9 +469,12 @@ export class Tree {
 	 * @param {string} url
 	 * @param {boolean} isDirectory
 	 */
-	constructor(name, url, isDirectory) {
+	constructor(name, url, isDirectory, mime, size, modifiedDate) {
 		this.#name = name;
 		this.#url = url;
+		this.mime = mime || null;
+		this.size = size || 0;
+		this.modifiedDate = normalizeModifiedDate(modifiedDate);
 		this.#children = isDirectory ? this.#childrenArray() : null;
 		this.#parent = null;
 	}
@@ -371,14 +498,17 @@ export class Tree {
 	 * @param {string} [name] file name
 	 * @param {boolean} [isDirectory] if the file is a directory
 	 */
-	static async create(url, name, isDirectory) {
+	static async create(url, name, isDirectory, mime, size, modifiedDate) {
 		if (!name && !isDirectory) {
 			const stat = await fsOperation(url).stat();
 			name = stat.name;
 			isDirectory = stat.isDirectory;
+			mime = stat.mime || stat.type;
+			size = stat.size;
+			modifiedDate = stat.modifiedDate;
 		}
 
-		return new Tree(name, url, isDirectory);
+		return new Tree(name, url, isDirectory, mime, size, modifiedDate);
 	}
 
 	/**
@@ -463,7 +593,7 @@ export class Tree {
 		this.#url = url;
 		this.#name = name;
 		this.#path = Url.join(this.#parent.path, name);
-		getAllFiles(this);
+		trackScan(getAllFiles(this));
 	}
 
 	/**
@@ -485,6 +615,9 @@ export class Tree {
 			url: this.#url,
 			path: this.#path,
 			parent: this.#parent?.url,
+			mime: this.mime,
+			size: this.size,
+			modifiedDate: this.modifiedDate,
 			isDirectory: !!this.#children,
 		};
 	}
@@ -495,10 +628,18 @@ export class Tree {
 	 * @returns {Tree}
 	 */
 	static fromJSON(json) {
-		const { name, url, path, parent, isDirectory } = json;
-		const tree = new Tree(name, url, isDirectory);
+		const { name, url, path, parent, mime, size, modifiedDate, isDirectory } =
+			json;
+		const tree = new Tree(name, url, isDirectory, mime, size, modifiedDate);
 		tree.#parent = getTree(Object.values(filesTree), parent);
 		tree.#path = path;
 		return tree;
 	}
+}
+
+function normalizeModifiedDate(value) {
+	if (!value) return 0;
+	if (typeof value === "number") return value;
+	const time = new Date(value).getTime();
+	return Number.isNaN(time) ? 0 : time;
 }

@@ -31,6 +31,7 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 0.72fr);
     grid-template-rows: repeat(2, minmax(0, 1fr));
+    gap: 1px;
     width: 1.5rem;
     min-width: 1.5rem;
     height: 1.5rem;
@@ -51,5 +52,67 @@
 
   .theme-swatch-main {
     grid-row: 1 / 3;
+  }
+
+  @supports not (gap: 1px) {
+    .theme-swatch-main {
+      margin-right: 1px;
+    }
+    .theme-swatch:nth-child(2) {
+      margin-left: 1px;
+      margin-bottom: 1px;
+    }
+    .theme-swatch:nth-child(3) {
+      margin-left: 1px;
+    }
+  }
+
+  .terminal-preview-content {
+    font-family: monospace;
+    font-size: 11px;
+    padding: 10px;
+    border-radius: 6px;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .ansi-colors {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 2px;
+    margin-bottom: 6px;
+  }
+
+  .ansi-swatch {
+    display: block;
+    height: 12px;
+    border-radius: 2px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .terminal-line {
+    line-height: 1.4;
+  }
+
+  .terminal-output {
+    color: inherit;
+  }
+
+  .terminal-cursor {
+    display: inline-block;
+    width: 7px;
+    height: 13px;
+    vertical-align: text-bottom;
+    animation: terminal-cursor-blink 1s steps(1) infinite;
+  }
+
+  @keyframes terminal-cursor-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
   }
 }

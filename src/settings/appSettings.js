@@ -1,12 +1,13 @@
 import fsOperation from "fileSystem";
-import ajax from "@deadlyjack/ajax";
 import { resetKeyBindings } from "cm/commandRegistry";
+import quickTools from "components/quickTools";
 import settingsPage from "components/settingsPage";
 import loader from "dialogs/loader";
 import select from "dialogs/select";
 import actions from "handlers/quickTools";
 import actionStack from "lib/actionStack";
-import constants from "lib/constants";
+import config from "lib/config";
+import fonts from "lib/fonts";
 import lang from "lib/lang";
 import openFile from "lib/openFile";
 import appSettings from "lib/settings";
@@ -14,16 +15,24 @@ import FontManager from "pages/fontManager";
 import QuickToolsSettings from "pages/quickTools";
 import encodings, { getEncoding } from "utils/encodings";
 import helpers from "utils/helpers";
+import { isPlayStoreInstall } from "utils/installSource";
 import Url from "utils/Url";
 
 export default function otherSettings() {
 	const values = appSettings.value;
 	const title = strings["app settings"].capitalize();
+	const installedFromPlayStore = isPlayStoreInstall();
+	const appFontText = strings["app font"] || "App font";
+	const appFontInfo =
+		strings["settings-info-app-font-family"] ||
+		"Choose the font used across the app interface.";
+	const defaultFontLabel = strings.default || "Default";
 	const categories = {
 		interface: strings["settings-category-interface"],
 		fonts: strings["settings-category-fonts"],
 		filesSessions: strings["settings-category-files-sessions"],
 		advanced: strings["settings-category-advanced"],
+		quickTools: strings["quick tools"],
 	};
 	const items = [
 		{
@@ -56,6 +65,25 @@ export default function otherSettings() {
 			category: categories.interface,
 		},
 		{
+			key: "uiZoom",
+			text: strings["ui zoom"] || "UI zoom",
+			value: values.uiZoom,
+			valueText: (value) => `${value}%`,
+			prompt: strings["ui zoom"] || "UI zoom",
+			promptType: "number",
+			promptOptions: {
+				test(value) {
+					if (!/^\d+$/.test(String(value).trim())) return false;
+					const zoom = Number(value);
+					return zoom >= 70 && zoom <= 160;
+				},
+			},
+			info:
+				strings["settings-info-app-ui-zoom"] ||
+				"Scale text across the Acode interface.",
+			category: categories.interface,
+		},
+		{
 			key: "keyboardMode",
 			text: strings["keyboard mode"],
 			value: values.keyboardMode,
@@ -78,13 +106,6 @@ export default function otherSettings() {
 			text: strings["vibrate on tap"],
 			checkbox: values.vibrateOnTap,
 			info: strings["settings-info-app-vibrate-on-tap"],
-			category: categories.interface,
-		},
-		{
-			key: "floatingButton",
-			text: strings["floating button"],
-			checkbox: values.floatingButton,
-			info: strings["settings-info-app-floating-button"],
 			category: categories.interface,
 		},
 		{
@@ -115,31 +136,6 @@ export default function otherSettings() {
 			category: categories.interface,
 		},
 		{
-			key: "quickTools",
-			text: strings["quick tools"],
-			checkbox: !!values.quickTools,
-			info: strings["info-quickTools"],
-			category: categories.interface,
-		},
-		{
-			key: "quickToolsTriggerMode",
-			text: strings["quicktools trigger mode"],
-			value: values.quickToolsTriggerMode,
-			select: [
-				[appSettings.QUICKTOOLS_TRIGGER_MODE_CLICK, "click"],
-				[appSettings.QUICKTOOLS_TRIGGER_MODE_TOUCH, "touch"],
-			],
-			info: strings["settings-info-app-quick-tools-trigger-mode"],
-			category: categories.interface,
-		},
-		{
-			key: "quickToolsSettings",
-			text: strings["shortcut buttons"],
-			info: strings["settings-info-app-quick-tools-settings"],
-			category: categories.interface,
-			chevron: true,
-		},
-		{
 			key: "touchMoveThreshold",
 			text: strings["touch move threshold"],
 			value: values.touchMoveThreshold,
@@ -152,6 +148,76 @@ export default function otherSettings() {
 			},
 			info: strings["settings-info-app-touch-move-threshold"],
 			category: categories.interface,
+		},
+		{
+			key: "floatingButton",
+			text: strings["quick tools toggler"],
+			checkbox: values.floatingButton,
+			info: strings["settings-info-app-floating-button"],
+			category: categories.quickTools,
+		},
+		{
+			key: "quickTools",
+			text: strings["quick tools height"],
+			value: values.quickTools,
+			valueText: (value) => {
+				const height = Number(value) || 0;
+				if (height === 0) return strings.off;
+				if (height === 1) return strings.compact;
+				return strings.full;
+			},
+			select: [
+				[0, strings.off],
+				[1, strings.compact],
+				[2, strings.full],
+			],
+			info: strings["info-quickTools"],
+			category: categories.quickTools,
+		},
+		{
+			key: "quickToolsTriggerMode",
+			text: strings["quicktools trigger mode"],
+			value: values.quickToolsTriggerMode,
+			valueText: (value) => {
+				const options = {
+					[appSettings.QUICKTOOLS_TRIGGER_MODE_CLICK]:
+						strings["quicktools-trigger:click"],
+					[appSettings.QUICKTOOLS_TRIGGER_MODE_TOUCH]:
+						strings["quicktools-trigger:touch"],
+				};
+
+				return options[value] ?? (value != null ? value.capitalize() : value);
+			},
+			select: [
+				[
+					appSettings.QUICKTOOLS_TRIGGER_MODE_CLICK,
+					strings["quicktools-trigger:click"],
+				],
+				[
+					appSettings.QUICKTOOLS_TRIGGER_MODE_TOUCH,
+					strings["quicktools-trigger:touch"],
+				],
+			],
+			info: strings["settings-info-app-quick-tools-trigger-mode"],
+			category: categories.quickTools,
+		},
+		{
+			key: "quickToolsSettings",
+			text: strings["shortcut buttons"],
+			info: strings["settings-info-app-quick-tools-settings"],
+			category: categories.quickTools,
+			chevron: true,
+		},
+		{
+			key: "appFont",
+			text: appFontText,
+			value: values.appFont || "",
+			valueText: (value) => value || defaultFontLabel,
+			get select() {
+				return [["", defaultFontLabel], ...fonts.getNames()];
+			},
+			info: appFontInfo,
+			category: categories.fonts,
 		},
 		{
 			key: "fontManager",
@@ -189,6 +255,7 @@ export default function otherSettings() {
 			promptType: "textarea",
 			promptOptions: {
 				test(value) {
+					if (!value.trim()) return true;
 					return value.split("\n").every((item) => {
 						return item.trim().length > 0;
 					});
@@ -234,18 +301,32 @@ export default function otherSettings() {
 			info: strings["settings-info-app-check-files"],
 			category: categories.advanced,
 		},
-		{
-			key: "checkForAppUpdates",
-			text: strings["check for app updates"],
-			checkbox: values.checkForAppUpdates,
-			info: strings["info-checkForAppUpdates"],
-			category: categories.advanced,
-		},
+		...(!installedFromPlayStore
+			? [
+					{
+						key: "checkForAppUpdates",
+						text: strings["check for app updates"],
+						checkbox: values.checkForAppUpdates,
+						info: strings["info-checkForAppUpdates"],
+						category: categories.advanced,
+					},
+				]
+			: []),
 		{
 			key: "console",
 			text: strings.console,
 			value: values.console,
-			select: [appSettings.CONSOLE_LEGACY, appSettings.CONSOLE_ERUDA],
+			valueText: (value) => {
+				const options = {
+					[appSettings.CONSOLE_LEGACY]: "Legacy",
+					[appSettings.CONSOLE_ERUDA]: "Eruda",
+				};
+				return options[value] ?? (value != null ? value.capitalize() : value);
+			},
+			select: [
+				[appSettings.CONSOLE_LEGACY, "Legacy"],
+				[appSettings.CONSOLE_ERUDA, "Eruda"],
+			],
 			info: strings["settings-info-app-console"],
 			category: categories.advanced,
 		},
@@ -299,6 +380,10 @@ export default function otherSettings() {
 				FontManager();
 				return;
 
+			case "appFont":
+				await fonts.setAppFont(value);
+				break;
+
 			case "console": {
 				if (value !== "eruda") {
 					break;
@@ -314,11 +399,9 @@ export default function otherSettings() {
 					strings["downloading..."],
 				);
 				try {
-					const erudaScript = await ajax({
-						url: constants.ERUDA_CDN,
-						responseType: "text",
-						contentType: "application/x-www-form-urlencoded",
-					});
+					const erudaScript = await fsOperation(config.ERUDA_CDN).readFile(
+						"utf-8",
+					);
 					await fsOperation(DATA_STORAGE).createFile("eruda.js", erudaScript);
 					loader.destroy();
 				} catch (error) {
@@ -385,11 +468,31 @@ export default function otherSettings() {
 				break;
 
 			case "floatingButton":
-				root.classList.toggle("hide-floating-button");
+				if (value && !editorManager.activeFile?.hideQuickTools) {
+					clearTimeout(quickTools.$toggler._hideTimeout);
+					quickTools.$toggler._hideTimeout = null;
+					quickTools.$toggler.classList.remove("hide");
+					if (!quickTools.$toggler.isConnected) {
+						root.appendOuter(quickTools.$toggler);
+					}
+				} else {
+					clearTimeout(quickTools.$toggler._hideTimeout);
+					quickTools.$toggler.classList.add("hide");
+					quickTools.$toggler._hideTimeout = setTimeout(() => {
+						quickTools.$toggler.remove();
+						quickTools.$toggler._hideTimeout = null;
+					}, 300);
+				}
 				break;
 
 			case "keyboardMode":
 				system.setInputType(value);
+				break;
+
+			case "uiZoom":
+				value = Number(value);
+				if (!Number.isInteger(value)) return;
+				value = Math.min(160, Math.max(70, value));
 				break;
 
 			case "fullscreen":
@@ -398,13 +501,8 @@ export default function otherSettings() {
 				break;
 
 			case "quickTools":
-				if (value) {
-					value = 1;
-					actions("set-height", 1);
-				} else {
-					value = 0;
-					actions("set-height", 0);
-				}
+				value = Number(value) || 0;
+				actions("set-height", { height: value, save: false });
 				break;
 
 			case "excludeFolders":
@@ -418,7 +516,7 @@ export default function otherSettings() {
 				break;
 		}
 
-		appSettings.update({
+		await appSettings.update({
 			[key]: value,
 		});
 	}

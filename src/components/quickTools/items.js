@@ -46,6 +46,8 @@ export default [
 	item("modulo", "letters", "insert", "%", "%"),
 	item("caret", "letters", "insert", "^", "^"),
 	item("hyphen", "letters", "insert", "-", "-"),
+	item("paste", "paste", "command", "paste"),
+	item("select all", "text_format", "command", "selectall"),
 ];
 
 /**
@@ -54,7 +56,7 @@ export default [
  * @returns
  */
 export function description(id) {
-	return strings[`quicktools:${id}`];
+	return strings[`quicktools:${id}`] || strings[id];
 }
 
 /**

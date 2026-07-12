@@ -1,3 +1,5 @@
+import "./runtimes/registerBuiltins";
+
 export {
 	bundles,
 	default as lspApi,
@@ -5,7 +7,10 @@ export {
 	defineServer,
 	installers,
 	register,
+	registerRuntime,
+	runtimes,
 	servers,
+	unregisterRuntime,
 	upsert,
 } from "./api";
 export { default as clientManager, LspClientManager } from "./clientManager";
@@ -28,12 +33,6 @@ export {
 	lspDiagnosticsExtension,
 	lspDiagnosticsUiExtension,
 } from "./diagnostics";
-export type { DocumentHighlightsConfig } from "./documentHighlights";
-export {
-	documentHighlightsClientExtension,
-	documentHighlightsEditorExtension,
-	documentHighlightsExtension,
-} from "./documentHighlights";
 export type {
 	DocumentSymbolsResult,
 	FlatSymbol,
@@ -57,6 +56,14 @@ export {
 	inlayHintsExtension,
 } from "./inlayHints";
 export {
+	addLspLog,
+	clearLspLogs,
+	getLspLogs,
+	onLspLog,
+	type LspLogEntry,
+	type LspLogLevel,
+} from "./logs";
+export {
 	closeReferencesPanel,
 	findAllReferences,
 	findAllReferencesInTab,
@@ -71,7 +78,38 @@ export {
 	resetManagedServers,
 	stopManagedServer,
 } from "./serverLauncher";
+export {
+	BUILTIN_ALPINE_RUNTIME_ID,
+	EXTERNAL_WEBSOCKET_RUNTIME_ID,
+	getRuntimeProvider,
+	inferWorkspaceKind,
+	isBuiltinAlpineAccessible,
+	listRuntimeProviders,
+	registerRuntimeProvider,
+	selectRuntimeProvider,
+	unregisterRuntimeProvider,
+} from "./runtimeProviders";
+export {
+	checkRuntimeServerInstallation,
+	getRuntimeInstallCommand,
+	getRuntimeLabelForServer,
+	getRuntimeUninstallCommand,
+	installRuntimeServer,
+	uninstallRuntimeServer,
+} from "./runtimeActions";
+export {
+	AUTO_RUNTIME_ID,
+	getDefaultRuntimeSetting,
+	getServerRuntimeSetting,
+	setDefaultRuntime,
+	setServerRuntime,
+} from "./runtimeSettings";
 export { default as serverRegistry } from "./serverRegistry";
+export {
+	nextSignature,
+	prevSignature,
+	showSignatureHelp,
+} from "./tooltipExtensions";
 export { createTransport } from "./transport";
 
 export type {
@@ -79,6 +117,7 @@ export type {
 	ClientManagerOptions,
 	ClientState,
 	DiagnosticRelatedInformation,
+	DocumentUriContext,
 	FileMetadata,
 	FormattingOptions,
 	LSPClientWithWorkspace,
@@ -86,6 +125,12 @@ export type {
 	LSPFormattingOptions,
 	LSPPluginAPI,
 	LspDiagnostic,
+	LspClientScope,
+	LspRuntimeConnection,
+	LspRuntimeContext,
+	LspRuntimeProvider,
+	LspRuntimeUriResolution,
+	LspRuntimeUriResolutionContext,
 	LspServerDefinition,
 	Position,
 	Range,
@@ -93,5 +138,6 @@ export type {
 	TransportDescriptor,
 	TransportHandle,
 	WorkspaceOptions,
+	WorkspaceKind,
 } from "./types";
 export { default as AcodeWorkspace } from "./workspace";

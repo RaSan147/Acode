@@ -1,16 +1,18 @@
 import "./plugin.scss";
 import fsOperation from "fileSystem";
-import ajax from "@deadlyjack/ajax";
 import Page from "components/page";
 import alert from "dialogs/alert";
 import loader from "dialogs/loader";
+import { addIntentHandler, removeIntentHandler } from "handlers/intent";
 import purchaseListener from "handlers/purchase";
 import actionStack from "lib/actionStack";
-import constants from "lib/constants";
+import auth, { loginEvents } from "lib/auth";
+import config from "lib/config";
+import customTab from "lib/customTab";
 import installPlugin from "lib/installPlugin";
 import InstallState from "lib/installState";
 import settings from "lib/settings";
-import { hideAd } from "lib/startAd";
+import { hideAd, interstitialAd } from "lib/startAd";
 import markdownIt from "markdown-it";
 import anchor from "markdown-it-anchor";
 import markdownItFootnote from "markdown-it-footnote";
@@ -19,21 +21,20 @@ import markdownItTaskLists from "markdown-it-task-lists";
 import { highlightCodeBlock, initHighlighting } from "utils/codeHighlight";
 import helpers from "utils/helpers";
 import Url from "utils/Url";
-import view from "./plugin.view.js";
+import { isVersionGreater } from "utils/version";
+import view, { cleanups } from "./plugin.view.js";
 
 let $lastPluginPage;
 
 /**
  * Plugin page
  * @param {string} id
- * @param {boolean} installed
  * @param {() => void} [onInstall]
  * @param {() => void} [onUninstall]
  * @param {boolean} [installOnRender]
  */
 export default async function PluginInclude(
 	id,
-	installed,
 	onInstall,
 	onUninstall,
 	installOnRender,
@@ -42,8 +43,8 @@ export default async function PluginInclude(
 		$lastPluginPage.hide();
 	}
 
-	installed = typeof installed !== "boolean" ? installed === "true" : installed;
 	const $page = Page(strings["plugin"]);
+	let installed = await fsOperation(PLUGIN_DIR, id).exists();
 	let plugin = {};
 	let currentVersion = "";
 	let purchased = false;
@@ -55,6 +56,10 @@ export default async function PluginInclude(
 	let purchaseToken;
 	let $settingsIcon;
 	let minVersionCode = -1;
+	let isSupported = true;
+	let unsupportedEditor;
+	let refundHandlerSet = false;
+	let purchaseHandlerSet = false;
 
 	actionStack.push({
 		id: "plugin",
@@ -67,6 +72,11 @@ export default async function PluginInclude(
 		loader.removeTitleLoader();
 		cancelled = true;
 		$lastPluginPage = null;
+		cleanups.forEach((cleanup) => {
+			try {
+				cleanup();
+			} catch {}
+		});
 	};
 
 	$lastPluginPage = $page;
@@ -126,10 +136,13 @@ export default async function PluginInclude(
 				keywords: installedPlugin.keywords,
 				contributors: installedPlugin.contributors,
 				repository: installedPlugin.repository,
+				supported_editor: installedPlugin.supported_editor,
 				description,
 				changelogs,
 			};
 
+			unsupportedEditor = installedPlugin.supported_editor;
+			isSupported = isPluginEditorSupported(unsupportedEditor);
 			isPaid = installedPlugin.price > 0;
 			$page.settitle(plugin.name);
 			render();
@@ -138,9 +151,9 @@ export default async function PluginInclude(
 		await (async () => {
 			try {
 				loader.showTitleLoader();
-				if ((await helpers.checkAPIStatus()) && isValidSource(plugin.source)) {
+				if (isValidSource(plugin.source)) {
 					const remotePlugin = await fsOperation(
-						constants.API_BASE,
+						config.API_BASE,
 						`plugin/${id}`,
 					)
 						.readFile("json")
@@ -148,7 +161,10 @@ export default async function PluginInclude(
 
 					if (cancelled || !remotePlugin) return;
 
-					if (installed && remotePlugin?.version !== plugin.version) {
+					if (
+						installed &&
+						isVersionGreater(remotePlugin?.version, plugin.version)
+					) {
 						currentVersion = plugin.version;
 						update = true;
 					}
@@ -158,22 +174,33 @@ export default async function PluginInclude(
 					}
 
 					plugin = Object.assign({}, remotePlugin);
+					unsupportedEditor = remotePlugin.supported_editor;
+					isSupported = isPluginEditorSupported(unsupportedEditor);
 
 					if (!Number.parseFloat(remotePlugin.price)) return;
 
 					isPaid = remotePlugin.price > 0;
-					try {
-						[product] = await helpers.promisify(iap.getProducts, [
-							remotePlugin.sku,
-						]);
-						if (product) {
-							const purchase = await getPurchase(product.productId);
-							purchased = !!purchase;
-							price = product.price;
-							purchaseToken = purchase?.purchaseToken;
+					purchased = remotePlugin.owned;
+					price = `${remotePlugin.currencySymbol ?? ""}${remotePlugin.price}`;
+
+					if (
+						helpers.isIapAvailable() &&
+						!purchased &&
+						(await helpers.checkAPIStatus())
+					) {
+						try {
+							[product] = await helpers.promisify(iap.getProducts, [
+								remotePlugin.sku,
+							]);
+							if (product) {
+								const purchase = await getPurchase(product.productId);
+								purchased = !!purchase;
+								price = product.price;
+								purchaseToken = purchase?.purchaseToken;
+							}
+						} catch (error) {
+							helpers.error(error);
 						}
-					} catch (error) {
-						helpers.error(error);
 					}
 				}
 			} catch (error) {
@@ -244,6 +271,40 @@ export default async function PluginInclude(
 		const oldText = $button.textContent;
 
 		try {
+			if (helpers.shouldAllowExternalPurchase()) {
+				await customTab(`${config.BASE_URL}/plugin/${id}?callback=app`);
+				if (!purchaseHandlerSet) {
+					purchaseHandlerSet = true;
+					const handler = async ({ module, action, value }) => {
+						if (module === "plugin" && action === "purchased" && value === id) {
+							loader.show();
+
+							try {
+								const pluginData = await fsOperation(
+									config.API_BASE,
+									`plugin/${id}`,
+								).readFile("json");
+
+								purchased = pluginData.owned;
+								render();
+							} catch (error) {
+								window.log(error);
+								helpers.error(error);
+							}
+
+							loader.hide();
+							purchaseHandlerSet = false;
+							removeIntentHandler(handler);
+						}
+					};
+					addIntentHandler(handler);
+					cleanups.push(() => removeIntentHandler(handler));
+				}
+				return;
+			}
+		} catch (error) {}
+
+		try {
 			if (!product) throw new Error("Product not found");
 			const apiStatus = await helpers.checkAPIStatus();
 
@@ -258,12 +319,13 @@ export default async function PluginInclude(
 
 			async function onpurchase(e) {
 				const purchase = await getPurchase(product.productId);
-				await ajax.post(Url.join(constants.API_BASE, "plugin/order"), {
-					data: {
+				await fetch(Url.join(config.API_BASE, "plugin/order"), {
+					method: "POST",
+					body: JSON.stringify({
 						id: plugin.id,
 						token: purchase?.purchaseToken,
 						package: BuildInfo.packageName,
-					},
+					}),
 				});
 				purchaseToken = purchase?.purchaseToken;
 				purchased = !!purchase;
@@ -286,19 +348,50 @@ export default async function PluginInclude(
 	async function refund(e) {
 		const $button = e.target;
 		const oldText = $button.textContent;
+
+		if (helpers.shouldAllowExternalPurchase()) {
+			await customTab(`${config.BASE_URL}/plugin/${id}?callback=app`);
+
+			if (!refundHandlerSet) {
+				refundHandlerSet = true;
+				const handler = ({ module, action, value }) => {
+					if (module === "plugin" && action === "uninstall" && value === id) {
+						purchased = false;
+
+						if (installed) {
+							uninstall();
+						} else {
+							render();
+						}
+
+						refundHandlerSet = false;
+						removeIntentHandler(handler);
+					}
+				};
+
+				addIntentHandler(handler);
+				cleanups.push(() => removeIntentHandler(handler));
+			}
+			return;
+		}
+
 		try {
 			if (!product) throw new Error("Product not found");
 			$button.textContent = strings["loading..."];
-			const { refer, refunded, error } = await ajax.post(
-				Url.join(constants.API_BASE, "plugin/refund"),
-				{
-					data: {
-						id: plugin.id,
-						package: BuildInfo.packageName,
-						token: purchaseToken,
-					},
-				},
-			);
+			const res = await fetch(Url.join(config.API_BASE, "plugin/refund"), {
+				method: "POST",
+				body: JSON.stringify({
+					id: plugin.id,
+					package: BuildInfo.packageName,
+					token: purchaseToken,
+				}),
+			});
+
+			if (!res.ok) {
+				throw new Error("Failed to fetch refund");
+			}
+
+			const { refer, refunded, error } = await res.json();
 			if (refer) {
 				system.openInBrowser(refer);
 				return;
@@ -364,6 +457,9 @@ export default async function PluginInclude(
 			uninstall,
 			currentVersion,
 			minVersionCode,
+			isSupported,
+			unsupportedEditor,
+			showEditorSupportWarning: !isSupported,
 		});
 
 		// Handle anchor links
@@ -476,10 +572,10 @@ export default async function PluginInclude(
 	async function loadAd(el) {
 		if (!helpers.canShowAds()) return;
 		try {
-			if (!(await window.iad?.isLoaded())) {
+			if (!(await interstitialAd?.isLoaded())) {
 				const oldText = el.textContent;
 				el.textContent = strings["loading..."];
-				await window.iad.load();
+				await interstitialAd?.load();
 				el.textContent = oldText;
 			}
 		} catch (error) {
@@ -495,7 +591,12 @@ export default async function PluginInclude(
 }
 
 function isValidSource(source) {
-	return source
-		? source.startsWith(Url.join(constants.API_BASE, "plugin"))
-		: true;
+	return source ? source.startsWith(Url.join(config.API_BASE, "plugin")) : true;
+}
+
+function isPluginEditorSupported(supportedEditor) {
+	return (
+		!supportedEditor ||
+		["all", config.SUPPORTED_EDITOR].includes(supportedEditor)
+	);
 }

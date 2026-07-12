@@ -1,7 +1,11 @@
 import settingsPage from "components/settingsPage";
 import confirm from "dialogs/confirm";
+import loader from "dialogs/loader";
 import rateBox from "dialogs/rateBox";
 import actionStack from "lib/actionStack";
+import auth from "lib/auth";
+import config from "lib/config";
+import customTab from "lib/customTab";
 import openFile from "lib/openFile";
 import removeAds from "lib/removeAds";
 import appSettings from "lib/settings";
@@ -53,7 +57,7 @@ export default function mainSettings() {
 		{
 			key: "terminal-settings",
 			text: `${strings["terminal settings"]}`,
-			icon: "licons terminal",
+			icon: "terminal",
 			info: strings["settings-info-main-terminal-settings"],
 			category: categories.core,
 			chevron: true,
@@ -96,7 +100,7 @@ export default function mainSettings() {
 				strings?.lsp_settings ||
 				strings["language servers"] ||
 				"Language servers",
-			icon: "licons zap",
+			icon: "zap",
 			info: strings["settings-info-main-lsp-settings"],
 			category: categories.customizationTools,
 			chevron: true,
@@ -159,7 +163,7 @@ export default function mainSettings() {
 		},
 	];
 
-	if (IS_FREE_VERSION) {
+	if (!config.HAS_PRO) {
 		items.push({
 			key: "adRewards",
 			text: strings["earn ad-free time"],
@@ -172,9 +176,28 @@ export default function mainSettings() {
 			key: "removeads",
 			text: strings["remove ads"],
 			icon: "block",
-			info: strings["settings-info-main-remove-ads"],
+			info: `${strings["settings-info-main-remove-ads"]}${!helpers.shouldAllowExternalPurchase() ? ` ${strings["iap-pro-purchase-warning"]}` : ""}`,
 			category: categories.supportAcode,
 			chevron: true,
+		});
+	}
+
+	// Add promotion items from cached data
+	const cachedPromotions = helpers.parseJSON(
+		localStorage.getItem("cached_promotions"),
+	);
+	if (Array.isArray(cachedPromotions) && cachedPromotions.length) {
+		categories.promotions = strings["settings-category-discover-apps"];
+		cachedPromotions.forEach((promo) => {
+			if (!promo.url || !promo.label || !/^https?:\/\//.test(promo.url)) return;
+			items.push({
+				key: `promo-${encodeURIComponent(promo.url)}`,
+				text: promo.label,
+				image: typeof promo.icon === "string" ? promo.icon : null,
+				info: typeof promo.link_text === "string" ? promo.link_text : "",
+				link: promo.url,
+				category: categories.promotions,
+			});
 		});
 	}
 
@@ -241,8 +264,48 @@ export default function mainSettings() {
 
 			case "removeads":
 				try {
-					await removeAds();
-					this.remove();
+					if (!helpers.shouldAllowExternalPurchase()) {
+						await removeAds();
+						this.remove();
+						break;
+					}
+
+					loader.create(strings.login, strings["loading..."]);
+
+					try {
+						let user = await auth.getLoggedInUser();
+						if (!user) {
+							const confirmation = await confirm(
+								strings.confirm,
+								strings["confirm-login"],
+							);
+
+							if (!confirmation) {
+								return;
+							}
+
+							loader.show();
+							await auth.login();
+
+							user = await auth.getLoggedInUser();
+						}
+
+						if (!user) {
+							throw new Error("Unable to fetch user");
+						}
+
+						if (user.acode_pro) {
+							this.remove();
+							return;
+						}
+					} catch (error) {
+						helpers.error(error);
+						return;
+					} finally {
+						loader.destroy();
+					}
+
+					customTab(`${config.BASE_URL}/pro?redirect=app`).catch(helpers.error);
 				} catch (error) {
 					helpers.error(error);
 				}
@@ -265,13 +328,47 @@ export default function mainSettings() {
 	page.show();
 
 	appSettings.uiSettings["main-settings"] = page;
-	appSettings.uiSettings["app-settings"] = otherSettings();
-	appSettings.uiSettings["file-settings"] = filesSettings();
-	appSettings.uiSettings["backup-restore"] = backupRestore();
-	appSettings.uiSettings["editor-settings"] = editorSettings();
-	appSettings.uiSettings["scroll-settings"] = scrollSettings();
-	appSettings.uiSettings["search-settings"] = searchSettings();
-	appSettings.uiSettings["preview-settings"] = previewSettings();
-	appSettings.uiSettings["terminal-settings"] = terminalSettings();
-	appSettings.uiSettings["lsp-settings"] = lspSettings();
+
+	const lazyPages = {
+		"app-settings": otherSettings,
+		"file-settings": filesSettings,
+		"backup-restore": backupRestore,
+		"editor-settings": editorSettings,
+		"scroll-settings": scrollSettings,
+		"search-settings": searchSettings,
+		"preview-settings": previewSettings,
+		"terminal-settings": terminalSettings,
+		"lsp-settings": lspSettings,
+	};
+
+	const instantiated = {};
+
+	for (const [key, initializer] of Object.entries(lazyPages)) {
+		delete appSettings.uiSettings[key];
+		Object.defineProperty(appSettings.uiSettings, key, {
+			get() {
+				if (!(key in instantiated)) {
+					instantiated[key] = initializer();
+					Object.defineProperty(appSettings.uiSettings, key, {
+						value: instantiated[key],
+						writable: true,
+						configurable: true,
+						enumerable: true,
+					});
+				}
+				return instantiated[key];
+			},
+			set(val) {
+				instantiated[key] = val;
+				Object.defineProperty(appSettings.uiSettings, key, {
+					value: val,
+					writable: true,
+					configurable: true,
+					enumerable: true,
+				});
+			},
+			configurable: true,
+			enumerable: false,
+		});
+	}
 }

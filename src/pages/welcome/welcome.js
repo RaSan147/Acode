@@ -1,7 +1,6 @@
-import "./welcome.scss";
-import Logo from "components/logo";
-import actionStack from "lib/actionStack";
-import constants from "lib/constants";
+import { getResolvedKeyBindings } from "cm/commandRegistry";
+import logoSrc from "components/logo/logo.png?inline";
+import config from "lib/config";
 import EditorFile from "lib/editorFile";
 
 /**
@@ -28,11 +27,6 @@ export default function openWelcomeTab() {
 
 	// Set custom subtitle for the header
 	welcomeFile.setCustomTitle(() => "Get Started");
-
-	actionStack.push({
-		id: "welcome-tab",
-		action: () => welcomeFile.remove(),
-	});
 }
 
 /**
@@ -40,11 +34,17 @@ export default function openWelcomeTab() {
  * @returns {HTMLElement}
  */
 function createWelcomeContent() {
+	const bindings = getResolvedKeyBindings();
+	const kb = (name) => {
+		const binding = bindings[name];
+		return binding?.key ? binding.key.split("|")[0].replace(/-/g, "+") : "";
+	};
+
 	return (
 		<div id="welcome-tab" className="welcome-page scroll">
 			{/* Hero Section */}
 			<header className="welcome-header">
-				<Logo />
+				<img className="logo" src={logoSrc} width="48" height="48" alt="" />
 				<div className="welcome-header-text">
 					<h1>Welcome to Acode</h1>
 					<p className="tagline">Powerful code editor for Android</p>
@@ -58,14 +58,26 @@ function createWelcomeContent() {
 					<ActionRow
 						icon="add"
 						label={strings["new file"]}
-						shortcut="Ctrl+N"
+						shortcut={kb("newFile")}
 						onClick={() => acode.exec("new-file")}
+					/>
+					<ActionRow
+						icon="document-text-outline"
+						label={strings["open file"]}
+						shortcut={kb("openFile")}
+						onClick={() => acode.exec("open-file")}
 					/>
 					<ActionRow
 						icon="folder_open"
 						label={strings["open folder"]}
-						shortcut="Ctrl+O"
+						shortcut={kb("openFolder")}
 						onClick={() => acode.exec("open-folder")}
+					/>
+					<ActionRow
+						icon="terminal"
+						label={strings.terminal}
+						shortcut={kb("openTerminal")}
+						onClick={() => acode.exec("new-terminal")}
 					/>
 					<ActionRow
 						icon="historyrestore"
@@ -75,7 +87,7 @@ function createWelcomeContent() {
 					<ActionRow
 						icon="tune"
 						label={strings["command palette"]}
-						shortcut="Ctrl+Shift+P"
+						shortcut={kb("openCommandPalette")}
 						onClick={() => acode.exec("command-palette")}
 					/>
 				</div>
@@ -124,18 +136,14 @@ function createWelcomeContent() {
 			<section className="welcome-section welcome-links">
 				<h2 className="section-label">CONNECT</h2>
 				<div className="link-row">
-					<LinkItem icon="acode" label="Website" url={constants.WEBSITE_URL} />
-					<LinkItem icon="github" label="GitHub" url={constants.GITHUB_URL} />
+					<LinkItem icon="acode" label="Website" url={config.BASE_URL} />
+					<LinkItem icon="github" label="GitHub" url={config.GITHUB_URL} />
 					<LinkItem
 						icon="telegram"
 						label="Telegram"
-						url={constants.TELEGRAM_URL}
+						url={config.TELEGRAM_URL}
 					/>
-					<LinkItem
-						icon="discord"
-						label="Discord"
-						url={constants.DISCORD_URL}
-					/>
+					<LinkItem icon="discord" label="Discord" url={config.DISCORD_URL} />
 				</div>
 			</section>
 		</div>

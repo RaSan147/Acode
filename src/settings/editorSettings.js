@@ -1,5 +1,5 @@
 import settingsPage from "components/settingsPage";
-import constants from "lib/constants";
+import config from "lib/config";
 import fonts from "lib/fonts";
 import appSettings from "lib/settings";
 import scrollSettings from "./scrollSettings";
@@ -40,7 +40,7 @@ export default function editorSettings() {
 			prompt: strings["font size"],
 			promptOptions: {
 				required: true,
-				match: constants.FONT_SIZE,
+				match: config.FONT_SIZE,
 			},
 			info: strings["settings-info-editor-font-size"],
 			category: categories.textLayout,
@@ -127,6 +127,47 @@ export default function editorSettings() {
 			category: categories.assistance,
 		},
 		{
+			key: "localWordCompletion",
+			text: strings["local word completion"],
+			checkbox: values.localWordCompletion,
+			info: strings["settings-info-editor-local-word-completion"],
+			category: categories.assistance,
+		},
+		{
+			key: "languageCompletion",
+			text: strings["language package completion"],
+			checkbox: values.languageCompletion ?? true,
+			info: strings["settings-info-editor-language-completion"],
+			category: categories.assistance,
+		},
+		{
+			key: "recommendExtensions",
+			text: strings["recommend extensions"],
+			checkbox: values.recommendExtensions ?? true,
+			info: strings["settings-info-editor-recommend-extensions"],
+			category: categories.assistance,
+		},
+		{
+			key: "useEmmet",
+			text: strings["use emmet"],
+			checkbox: values.useEmmet ?? true,
+			category: categories.assistance,
+		},
+		{
+			key: "autoCloseTags",
+			text: strings["auto close tags"],
+			checkbox: values.autoCloseTags,
+			info: strings["settings-info-editor-auto-close-tags"],
+			category: categories.assistance,
+		},
+		{
+			key: "autoRenameTags",
+			text: strings["auto rename tags"],
+			checkbox: values.autoRenameTags ?? true,
+			info: strings["settings-info-editor-auto-rename-tags"],
+			category: categories.assistance,
+		},
+		{
 			key: "colorPreview",
 			text: strings["color preview"],
 			checkbox: values.colorPreview,
@@ -164,7 +205,7 @@ export default function editorSettings() {
 		{
 			key: "indentGuides",
 			text: strings["indent guides"] || "Indent guides",
-			checkbox: values.indentGuides ?? true,
+			checkbox: values.indentGuides ?? false,
 			info: strings["settings-info-editor-indent-guides"],
 			category: categories.guidesIndicators,
 		},
@@ -183,25 +224,16 @@ export default function editorSettings() {
 			category: categories.guidesIndicators,
 		},
 		{
-			key: "teardropSize",
-			text: strings["cursor controller size"],
-			value: values.teardropSize,
-			valueText(value) {
-				return this.select.find(([v]) => v === value)[1];
-			},
-			select: [
-				[0, strings.none],
-				[20, strings.small],
-				[30, strings.medium],
-				[60, strings.large],
-			],
-			info: strings["settings-info-editor-teardrop-size"],
+			key: "showShareButton",
+			text: strings["show share button"],
+			checkbox: values.showShareButton ?? true,
+			info: strings["settings-info-editor-show-share-button"],
 			category: categories.cursorSelection,
 		},
 		{
 			key: "shiftClickSelection",
 			text: strings["shift click selection"],
-			checkbox: values.shiftClickSelection,
+			checkbox: values.shiftClickSelection !== false,
 			info: strings["settings-info-editor-shift-click-selection"],
 			category: categories.cursorSelection,
 		},

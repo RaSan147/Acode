@@ -1,11 +1,12 @@
 import fsOperation from "fileSystem";
+import { getDocText } from "cm/editorUtils";
 import prompt from "dialogs/prompt";
 import select from "dialogs/select";
 import recents from "lib/recents";
 import FileBrowser from "pages/fileBrowser";
 import helpers from "utils/helpers";
 import Url from "utils/Url";
-import constants from "./constants";
+import config from "./config";
 import EditorFile from "./editorFile";
 import openFolder from "./openFolder";
 import appSettings from "./settings";
@@ -50,11 +51,6 @@ async function saveFile(file, isSaveAs = false) {
 	 */
 	const { encoding } = file;
 	/**
-	 * File data
-	 * @type {string}
-	 */
-	const data = file.session ? file.session.doc.toString() : "";
-	/**
 	 * File tab bar text element, used to show saving status
 	 * @type {HTMLElement}
 	 */
@@ -86,7 +82,9 @@ async function saveFile(file, isSaveAs = false) {
 		}
 
 		// in case if user cancels the dialog
-		if (!filename) return;
+		if (!filename) {
+			return;
+		}
 	}
 
 	if (filename !== file.filename) {
@@ -121,10 +119,24 @@ async function saveFile(file, isSaveAs = false) {
 
 		if (appSettings.value.formatOnSave) {
 			editorManager.activeFile.markChanged = false;
-			acode.exec("format", false);
+			try {
+				acode.exec("format", false);
+			} finally {
+				editorManager.activeFile.markChanged = true;
+			}
 		}
 
+		const savedDoc = file.session?.doc || null;
+		const savedVersion = file.docVersion;
+		const data = getDocText(savedDoc);
+
 		await fileOnDevice.writeFile(data, encoding);
+		const stat = await fileOnDevice.stat().catch(() => null);
+		file.markSaved({
+			mtime: helpers.getStatMtime(stat),
+			savedDoc,
+			savedVersion,
+		});
 
 		if (file.location) {
 			recents.addFolder(file.location);
@@ -133,7 +145,6 @@ async function saveFile(file, isSaveAs = false) {
 		clearTimeout(saveTimeout);
 		saveTimeout = setTimeout(() => {
 			file.isSaving = false;
-			file.isUnsaved = false;
 			if (newUrl) recents.addFile(file.uri);
 			editorManager.onupdate("save-file");
 			editorManager.emit("update", "save-file");
@@ -165,7 +176,7 @@ async function saveFile(file, isSaveAs = false) {
 			name || "",
 			strings["new file"],
 			{
-				match: constants.FILE_NAME_REGEX,
+				match: config.FILE_NAME_REGEX,
 				required: true,
 			},
 		);

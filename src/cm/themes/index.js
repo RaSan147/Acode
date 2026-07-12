@@ -1,11 +1,18 @@
 import { EditorState } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
 import aura, { config as auraConfig } from "./aura";
+import ayuDark, { config as ayuDarkConfig } from "./ayuDark";
+import cobalt, { config as cobaltConfig } from "./cobalt";
 import dracula, { config as draculaConfig } from "./dracula";
 import githubDark, { config as githubDarkConfig } from "./githubDark";
 import githubLight, { config as githubLightConfig } from "./githubLight";
+import gruvboxDark, { config as gruvboxDarkConfig } from "./gruvboxDark";
+import materialPalenight, {
+	config as materialPalenightConfig,
+} from "./materialPalenight";
 import monokai, { config as monokaiConfig } from "./monokai";
 import noctisLilac, { config as noctisLilacConfig } from "./noctisLilac";
+import nord, { config as nordConfig } from "./nord";
 import solarizedDark, { config as solarizedDarkConfig } from "./solarizedDark";
 import solarizedLight, {
 	config as solarizedLightConfig,
@@ -156,6 +163,13 @@ export function removeTheme(id) {
 addTheme("one_dark", "One Dark", true, () => [oneDark], oneDarkConfig);
 addTheme(auraConfig.name, "Aura", !!auraConfig.dark, () => aura(), auraConfig);
 addTheme(
+	cobaltConfig.name,
+	"Cobalt",
+	!!cobaltConfig.dark,
+	() => cobalt(),
+	cobaltConfig,
+);
+addTheme(
 	noctisLilacConfig.name,
 	noctisLilacConfig.caption || "Noctis Lilac",
 	!!noctisLilacConfig.dark,
@@ -168,6 +182,28 @@ addTheme(
 	!!draculaConfig.dark,
 	() => dracula(),
 	draculaConfig,
+);
+addTheme(nordConfig.name, "Nord", !!nordConfig.dark, () => nord(), nordConfig);
+addTheme(
+	gruvboxDarkConfig.name,
+	"Gruvbox Dark",
+	!!gruvboxDarkConfig.dark,
+	() => gruvboxDark(),
+	gruvboxDarkConfig,
+);
+addTheme(
+	ayuDarkConfig.name,
+	"Ayu Dark",
+	!!ayuDarkConfig.dark,
+	() => ayuDark(),
+	ayuDarkConfig,
+);
+addTheme(
+	materialPalenightConfig.name,
+	"Material Palenight",
+	!!materialPalenightConfig.dark,
+	() => materialPalenight(),
+	materialPalenightConfig,
 );
 addTheme(
 	githubDarkConfig.name,

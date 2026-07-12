@@ -1,7 +1,9 @@
 import "core-js/stable";
 import picomatch from "picomatch/posix";
+import { isBinaryFile } from "utils/binaryExtensions";
 
 const resolvers = {};
+const MAX_CONCURRENT_FILE_READS = 2;
 
 self.onmessage = (ev) => {
 	const { action, data, error, id } = ev.data;
@@ -39,29 +41,59 @@ function processFiles(data, mode = "search") {
 	const { test: skip } = Skip(options);
 	const total = files.length;
 	let count = 0;
+	let cursor = 0;
+	let active = 0;
+	let pumpScheduled = false;
 
-	files.forEach(processFile);
+	if (!total) {
+		done(1, mode);
+		return;
+	}
+
+	pump();
+
+	/**
+	 * Starts more file reads without flooding the main thread.
+	 */
+	function pump() {
+		pumpScheduled = false;
+		while (active < MAX_CONCURRENT_FILE_READS && cursor < total) {
+			const file = files[cursor++];
+			active += 1;
+			processFile(file);
+		}
+	}
+
+	function schedulePump() {
+		if (pumpScheduled) return;
+		pumpScheduled = true;
+		Promise.resolve().then(pump);
+	}
+
+	function finishOne() {
+		active -= 1;
+		done(++count / total, mode);
+		schedulePump();
+	}
 
 	/**
 	 * Process a file for search or replace operation.
-	 *
-	 * @param {object} file - The file object to process.
-	 * @param {string} file.url - The URL of the file.
+	 * @param {object} file
 	 */
 	function processFile(file) {
 		if (skip(file)) {
-			done(++count / total, mode);
+			finishOne();
 			return;
 		}
 
 		getFile(file.url, (res, err) => {
 			if (err) {
-				done(++count / total, mode);
-				throw err;
+				finishOne();
+				return;
 			}
 
 			process({ file, content: res, search, replace, options });
-			done(++count / total, mode);
+			finishOne();
 		});
 	}
 }
@@ -93,7 +125,7 @@ function searchInFile({ file, content, search }) {
 		};
 		const [line, renderText] = getSurrounding(content, word, start, end);
 		text += `\n\t${line.trim()}`;
-		matches.push({ match: word, position, renderText });
+		matches.push({ match: word, position, renderText, line: line.trim() });
 	}
 
 	self.postMessage({
@@ -131,24 +163,37 @@ function replaceInFile({ file, content, search, replace }) {
  * @param {number} end
  */
 function getSurrounding(content, word, start, end) {
-	const max = 50;
-	const remaining = max - (end - start);
-	let result = [];
-
-	if (remaining <= 0) {
-		word = word.slice(-max);
-		result = [`...${word}`, word];
-	} else {
-		let left = Math.floor(remaining / 2);
-		let right = left;
-
-		let leftText = content.substring(start - left, start);
-		let rightText = content.substring(end, end + right);
-
-		result = [`${leftText}${word}${rightText}`, word];
+	const max = 160;
+	let lineStart = start;
+	while (lineStart > 0) {
+		const previous = content[lineStart - 1];
+		if (previous === "\n" || previous === "\r") break;
+		lineStart--;
 	}
 
-	return result.map((text) => text.replace(/[\r\n]+/g, " ⏎ "));
+	let lineEnd = end;
+	while (lineEnd < content.length) {
+		const current = content[lineEnd];
+		if (current === "\n" || current === "\r") break;
+		lineEnd++;
+	}
+
+	let snippetStart = lineStart;
+	let snippetEnd = lineEnd;
+	if (lineEnd - lineStart > max) {
+		const matchLength = Math.max(1, end - start);
+		const remaining = Math.max(0, max - matchLength);
+		const left = Math.floor(remaining / 2);
+		const right = remaining - left;
+		snippetStart = Math.max(lineStart, start - left);
+		snippetEnd = Math.min(lineEnd, end + right);
+	}
+
+	let line = content.substring(snippetStart, snippetEnd).trim();
+	if (snippetStart > lineStart) line = `...${line}`;
+	if (snippetEnd < lineEnd) line = `${line}...`;
+
+	return [line, word].map((text) => text.replace(/[\r\n]+/g, " ⏎ "));
 }
 
 /**
@@ -222,53 +267,10 @@ function done(ratio, mode) {
  * @param {string} arg.include - The inclusion patterns separated by commas.
  */
 function Skip({ exclude, include }) {
-	// Default exclude patterns for binary/media/archives/fonts/etc.
-	const defaultExcludes = [
-		"**/*.png",
-		"**/*.jpg",
-		"**/*.jpeg",
-		"**/*.gif",
-		"**/*.bmp",
-		"**/*.webp",
-		"**/*.avif",
-		"**/*.ico",
-		"**/*.svgz",
-		"**/*.mp3",
-		"**/*.wav",
-		"**/*.ogg",
-		"**/*.flac",
-		"**/*.m4a",
-		"**/*.aac",
-		"**/*.mp4",
-		"**/*.mkv",
-		"**/*.webm",
-		"**/*.mov",
-		"**/*.avi",
-		"**/*.zip",
-		"**/*.gz",
-		"**/*.bz2",
-		"**/*.xz",
-		"**/*.7z",
-		"**/*.rar",
-		"**/*.tar",
-		"**/*.exe",
-		"**/*.dll",
-		"**/*.so",
-		"**/*.bin",
-		"**/*.class",
-		"**/*.ttf",
-		"**/*.otf",
-		"**/*.woff",
-		"**/*.woff2",
-		"**/*.pdf",
-		"**/*.psd",
-		"**/*.ai",
-		"**/*.sketch",
-	];
 	const userExcludes = (exclude ? exclude.split(",") : [])
 		.map((p) => p.trim())
 		.filter(Boolean);
-	const excludeFiles = [...defaultExcludes, ...userExcludes];
+	const excludeFiles = userExcludes;
 	const includeFiles = (include ? include.split(",") : ["**"]).map((p) =>
 		p.trim(),
 	);
@@ -282,6 +284,7 @@ function Skip({ exclude, include }) {
 	 */
 	function test(file) {
 		if (!file.path) return false;
+		if (isBinaryFile(file)) return true;
 		const match = (pattern) =>
 			picomatch.isMatch(file.path, pattern, { matchBase: true });
 		return excludeFiles.some(match) || !includeFiles.some(match);

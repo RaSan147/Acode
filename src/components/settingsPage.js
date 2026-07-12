@@ -6,6 +6,7 @@ import Ref from "html-tag-js/ref";
 import actionStack from "lib/actionStack";
 import appSettings from "lib/settings";
 import { hideAd } from "lib/startAd";
+import { animate, hover, press } from "motion";
 import FileBrowser from "pages/fileBrowser";
 import { isValidColor } from "utils/color/regex";
 import helpers from "utils/helpers";
@@ -20,6 +21,7 @@ import searchBar from "./searchbar";
  * @property {(key:string)=>HTMLElement[]} search search for a setting
  * @property {(title:string)=>void} setTitle set title of settings page
  * @property {()=>void} restoreList restore list to original state
+ * @property {()=>HTMLDivElement} getListElement get the page's list element
  */
 
 /**
@@ -113,6 +115,13 @@ export default function settingsPage(
 	$page.append(<div style={{ height: "50vh" }}></div>);
 
 	return {
+		/**
+		 * Get this page's list element.
+		 * @returns {HTMLDivElement}
+		 */
+		getListElement() {
+			return $list;
+		},
 		/**
 		 * Show settings page
 		 * @param {string} goTo Key of setting to scroll to and select
@@ -233,15 +242,29 @@ function listItems($list, items, callback, options = {}) {
 		const item = itemByKey.get(key);
 		if (!item) return;
 		const result = await resolveItemInteraction(item, $target);
-		if (result.shouldCallCallback === false) return;
-		if (!result.shouldUpdateValue)
+		if (result.shouldCallCallback === false) {
+			dispatchItemInteractionEnd($target, false);
+			return;
+		}
+		if (!result.shouldUpdateValue) {
+			dispatchItemInteractionEnd($target, false);
 			return callback.call($target, key, item.value);
+		}
 
 		item.value = result.value;
 		updateItemValueDisplay($target, item, options, useInfoAsDescription);
+		dispatchItemInteractionEnd($target, true);
 
 		callback.call($target, key, item.value);
 	}
+}
+
+function dispatchItemInteractionEnd($target, updated) {
+	$target.dispatchEvent(
+		new CustomEvent("settings-item-interaction-end", {
+			detail: { updated },
+		}),
+	);
 }
 
 function normalizeSettings(settings) {
@@ -253,7 +276,6 @@ function normalizeSettings(settings) {
 			return false;
 		}
 
-		ensureSettingInfo(setting);
 		return true;
 	});
 
@@ -263,31 +285,24 @@ function normalizeSettings(settings) {
 	};
 }
 
-function ensureSettingInfo(setting) {
-	if (setting.info) return;
-
-	Object.defineProperty(setting, "info", {
-		get() {
-			return strings[`info-${this.key.toLocaleLowerCase()}`];
-		},
-	});
-}
-
 function shouldEnableSearch(type, settingsCount) {
 	return type === "united" || (type === "separate" && settingsCount > 5);
 }
 
 function restoreAllSettingsPages() {
-	Object.values(appSettings.uiSettings).forEach((page) => {
+	getSettingsPages().forEach((page) => {
 		page.restoreList();
 	});
 }
 
 function createSearchHandler(type, searchItems) {
+	let settingsPages;
+
 	return (key) => {
 		if (type === "united") {
 			const $items = [];
-			Object.values(appSettings.uiSettings).forEach((page) => {
+			settingsPages ??= getSettingsPages(true);
+			settingsPages.forEach((page) => {
 				$items.push(...page.search(key));
 			});
 			return $items;
@@ -298,6 +313,16 @@ function createSearchHandler(type, searchItems) {
 			return text.match(key, "i");
 		});
 	};
+}
+
+function getSettingsPages(includeLazyPages = false) {
+	const keys = includeLazyPages
+		? Object.getOwnPropertyNames(appSettings.uiSettings)
+		: Object.keys(appSettings.uiSettings);
+
+	return keys
+		.map((key) => appSettings.uiSettings[key])
+		.filter((page) => page?.search && page?.restoreList);
 }
 
 function createNote(note) {
@@ -321,14 +346,27 @@ function createListItemElement(item, options, useInfoAsDescription) {
 	const $item = (
 		<div
 			tabIndex={1}
-			className={`list-item ${item.sake ? "sake" : ""} ${item.icon ? "" : "no-leading-icon"}`}
+			className={`list-item ${item.sake ? "sake" : ""} ${item.icon || item.image ? "" : "no-leading-icon"}`}
 			data-key={item.key}
 			data-action="list-item"
 		>
 			<span
-				className={`icon ${item.icon || "no-icon"}`}
+				className={`icon ${item.icon || (item.image ? "" : "no-icon")}`}
 				style={{ color: item.iconColor }}
-			></span>
+			>
+				{item.image && (
+					<img
+						src={item.image}
+						alt=""
+						style={{
+							width: "100%",
+							height: "100%",
+							objectFit: "contain",
+							borderRadius: "4px",
+						}}
+					/>
+				)}
+			</span>
 			<div ref={$setting} className="container">
 				<div className="text">{item.text?.capitalize?.(0) ?? item.text}</div>
 			</div>
@@ -343,7 +381,17 @@ function createListItemElement(item, options, useInfoAsDescription) {
 	}
 
 	if (isCheckboxItem) {
-		const $checkbox = Checkbox("", item.checkbox || item.value);
+		const $checkbox = Checkbox(
+			"",
+			item.checkbox || item.value,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			true,
+		);
+		$checkbox.classList.add("switch");
 		$tail.el.appendChild($checkbox);
 	}
 
@@ -376,7 +424,55 @@ function createListItemElement(item, options, useInfoAsDescription) {
 		$tail.el.remove();
 	}
 
+	// Register high-performance press transitions
+	press($item, (element) => {
+		if (document.body.classList.contains("no-animation")) return;
+		animate(
+			element,
+			{ scale: 0.985 },
+			{ type: "spring", stiffness: 450, damping: 25 },
+		);
+		return () => {
+			animate(
+				element,
+				{ scale: 1 },
+				{ type: "spring", stiffness: 450, damping: 25 },
+			);
+		};
+	});
+
+	if (supportsPrimaryHoverInput()) {
+		hover($item, (element) => {
+			if (document.body.classList.contains("no-animation")) {
+				element.style.backgroundColor =
+					"color-mix(in srgb, var(--secondary-color), var(--popup-text-color) 4%)";
+				return () => {
+					element.style.backgroundColor = "transparent";
+				};
+			}
+			animate(
+				element,
+				{
+					backgroundColor:
+						"color-mix(in srgb, var(--secondary-color), var(--popup-text-color) 4%)",
+				},
+				{ duration: 0.15 },
+			);
+			return () => {
+				animate(
+					element,
+					{ backgroundColor: "transparent" },
+					{ duration: 0.15 },
+				);
+			};
+		});
+	}
+
 	return $item;
+}
+
+function supportsPrimaryHoverInput() {
+	return globalThis.matchMedia?.("(hover: hover)").matches === true;
 }
 
 function isBooleanSetting(item) {
@@ -435,9 +531,9 @@ function createTrailingValueDisplay(item) {
 	return (
 		<div className={`setting-value-display ${item.select ? "is-select" : ""}`}>
 			{$trailingValueText}
-			{item.select
-				? <span className="icon keyboard_arrow_down setting-value-icon"></span>
-				: null}
+			{item.select ? (
+				<span className="icon keyboard_arrow_down setting-value-icon"></span>
+			) : null}
 		</div>
 	);
 }
@@ -491,9 +587,9 @@ function buildListContent(renderedItems, options) {
 
 function createSectionElements(category) {
 	const shouldShowLabel = category !== "__default__";
-	const $label = shouldShowLabel
-		? <div className="settings-section-label">{category}</div>
-		: null;
+	const $label = shouldShowLabel ? (
+		<div className="settings-section-label">{category}</div>
+	) : null;
 	const $card = <div className="settings-section-card"></div>;
 	return {
 		$card,
@@ -572,11 +668,18 @@ async function resolveItemInteraction(item, $target) {
 		}
 
 		if (selectColor) {
-			const color = await colorPicker(value);
-			return {
-				shouldUpdateValue: true,
-				value: color,
-			};
+			try {
+				const color = await colorPicker(value);
+				return {
+					shouldUpdateValue: true,
+					value: color,
+				};
+			} catch (_) {
+				return {
+					shouldUpdateValue: false,
+					shouldCallCallback: false,
+				};
+			}
 		}
 
 		if (link) {

@@ -1,3 +1,14 @@
+// automatically include credentials for acode.app API requests
+(function () {
+	const _fetch = window.fetch;
+	window.fetch = function (url, options) {
+		if (typeof url === "string" && url.includes("acode.app/api")) {
+			options = { ...options, credentials: "include" };
+		}
+		return _fetch.call(this, url, options);
+	};
+})();
+
 // polyfill for prepend
 
 (function (arr) {
@@ -90,6 +101,36 @@
 		});
 	});
 })([Element.prototype, CharacterData.prototype, DocumentType.prototype]);
+
+// polyfill for replaceChildren
+
+(function (arr) {
+	arr.forEach(function (item) {
+		if (item.hasOwnProperty("replaceChildren")) {
+			return;
+		}
+		Object.defineProperty(item, "replaceChildren", {
+			configurable: true,
+			enumerable: false,
+			writable: true,
+			value: function replaceChildren() {
+				while (this.firstChild) {
+					this.removeChild(this.firstChild);
+				}
+				// biome-ignore lint/style/useForOf: ES5 polyfill cannot use for...of
+				for (var i = 0; i < arguments.length; i++) {
+					var node = arguments[i];
+					if (typeof node !== "object") {
+						node = this.ownerDocument.createTextNode(String(node));
+					} else if (node.parentNode) {
+						node.parentNode.removeChild(node);
+					}
+					this.appendChild(node);
+				}
+			},
+		});
+	});
+})([Element.prototype, Document.prototype, DocumentFragment.prototype]);
 
 // polyfill for toggleAttribute
 

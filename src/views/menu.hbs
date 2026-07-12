@@ -2,11 +2,11 @@
   <span class="text">{{new file}}</span>
   <span class="icon file-control document-add"></span>
 </li>
-<li action="save">
+<li action="save" {{^can_save_file}}class="disabled" {{/can_save_file}}>
   <span class="text">{{save}}</span>
   <span class="icon save"></span>
 </li>
-<li action="save-as">
+<li action="save-as" {{^can_save_file}}class="disabled" {{/can_save_file}}>
   <span class="text">{{save as}}</span>
   <span class="icon save" style="filter: brightness(85%)"></span>
 </li>
@@ -32,7 +32,11 @@
 </li>
 <li action="new-terminal">
   <span class="text">{{terminal}}</span>
-  <span class="licons terminal"></span>
+  <span class="icon terminal"></span>
+</li>
+<li action="running-processes">
+  <span class="text">{{running processes}}</span>
+  <span class="icon apps"></span>
 </li>
 <hr>
 <li action="open" value="settings">

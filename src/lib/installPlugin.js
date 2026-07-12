@@ -1,5 +1,4 @@
 import fsOperation from "fileSystem";
-import ajax from "@deadlyjack/ajax";
 import alert from "dialogs/alert";
 import confirm from "dialogs/confirm";
 import loader from "dialogs/loader";
@@ -7,9 +6,10 @@ import purchaseListener from "handlers/purchase";
 import JSZip from "jszip";
 import helpers from "utils/helpers";
 import Url from "utils/Url";
-import constants from "./constants";
+import { isVersionGreater } from "utils/version";
+import config from "./config";
 import InstallState from "./installState";
-import loadPlugin from "./loadPlugin";
+import { loadPluginWithTimeout } from "./loadPlugins";
 
 /** @type {import("dialogs/loader").Loader} */
 let loaderDialog;
@@ -50,7 +50,7 @@ export default async function installPlugin(
 
 	if (!/^(https?|file|content):/.test(id)) {
 		pluginUrl = Url.join(
-			constants.API_BASE,
+			config.API_BASE,
 			"plugin/download/",
 			`${id}?device=${device.uuid}`,
 		);
@@ -68,7 +68,7 @@ export default async function installPlugin(
 
 		let plugin;
 		if (
-			pluginUrl.includes(constants.API_BASE) ||
+			pluginUrl.includes(config.API_BASE) ||
 			pluginUrl.startsWith("file:") ||
 			pluginUrl.startsWith("content:")
 		) {
@@ -251,13 +251,13 @@ export default async function installPlugin(
 
 			if (isDependency) {
 				depsLoaders.push(async () => {
-					await loadPlugin(id, true);
+					await loadPluginWithTimeout(id, true);
 				});
 			} else {
 				for (const loader of depsLoaders) {
 					await loader();
 				}
-				await loadPlugin(id, true);
+				await loadPluginWithTimeout(id, true);
 			}
 
 			await state.save();
@@ -397,7 +397,7 @@ async function resolveDepsManifest(deps) {
 	const resolved = [];
 	for (const dependency of deps) {
 		const remoteDependency = await fsOperation(
-			constants.API_BASE,
+			config.API_BASE,
 			`plugin/${dependency}`,
 		)
 			.readFile("json")
@@ -407,7 +407,8 @@ async function resolveDepsManifest(deps) {
 			throw new Error(`Unknown plugin dependency: ${dependency}`);
 
 		const version = await getInstalledPluginVersion(remoteDependency.id);
-		if (remoteDependency?.version === version) continue;
+		if (version && !isVersionGreater(remoteDependency?.version, version))
+			continue;
 
 		if (remoteDependency.dependencies) {
 			const manifests = await resolveDepsManifest(
@@ -467,12 +468,13 @@ async function resolveDep(manifest) {
 
 		async function onpurchase(e) {
 			const purchase = await getPurchase(product.productId);
-			await ajax.post(Url.join(constants.API_BASE, "plugin/order"), {
-				data: {
+			await fetch(Url.join(config.API_BASE, "plugin/order"), {
+				method: "POST",
+				body: JSON.stringify({
 					id: manifest.id,
 					token: purchase?.purchaseToken,
 					package: BuildInfo.packageName,
-				},
+				}),
 			});
 			purchaseToken = purchase?.purchaseToken;
 		}

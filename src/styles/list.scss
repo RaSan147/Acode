@@ -9,6 +9,8 @@
 
   &.collapsible {
     &.hidden {
+      display: block !important;
+
       ul {
         display: none;
       }
@@ -32,7 +34,7 @@
       background-color: rgba($color: #000000, $alpha: 0.1);
 
       &.loading {
-        @include mixins.linear-loader(30%, 2px);
+        @include mixins.bar-loader(30%, 2px);
       }
 
       >.folder::before {
@@ -74,7 +76,7 @@
 
     .icon.lang {
       padding-right: 5px;
-      font-family: "Roboto", sans-serif;
+      font-family: var(--app-font-family);
       font-weight: bolder;
       color: rgb(37, 37, 37);
       color: var(--secondary-text-color);

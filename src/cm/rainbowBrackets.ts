@@ -1,175 +1,305 @@
 import { syntaxTree } from "@codemirror/language";
+import { RangeSetBuilder } from "@codemirror/state";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
-import type { SyntaxNode } from "@lezer/common";
 
-const COLORS = ["gold", "orchid", "lightblue"];
+const DEFAULT_DARK_COLORS = [
+	"#e5c07b",
+	"#c678dd",
+	"#56b6c2",
+	"#61afef",
+	"#98c379",
+	"#d19a66",
+];
 
-// Token types that should be skipped (brackets inside these are not colored)
-const SKIP_CONTEXTS = new Set([
-	"String",
-	"TemplateString",
-	"Comment",
-	"LineComment",
-	"BlockComment",
-	"RegExp",
-]);
+const DEFAULT_LIGHT_COLORS = [
+	"#795e26",
+	"#af00db",
+	"#005cc5",
+	"#008000",
+	"#b15c00",
+	"#267f99",
+];
 
-interface BracketInfo {
-	from: number;
-	to: number;
-	depth: number;
-	char: string;
+const MIN_LOOK_BEHIND = 4000;
+const MAX_LOOK_BEHIND = 24000;
+const DEFAULT_EXACT_SCAN_LIMIT = 24000;
+
+const CLOSING_TO_OPENING = {
+	")": "(",
+	"]": "[",
+	"}": "{",
+} as const;
+
+type ClosingBracket = keyof typeof CLOSING_TO_OPENING;
+
+export interface RainbowBracketThemeConfig {
+	dark?: boolean;
+	keyword?: string;
+	type?: string;
+	class?: string;
+	function?: string;
+	string?: string;
+	number?: string;
+	constant?: string;
+	variable?: string;
+	foreground?: string;
 }
 
-const rainbowBracketsPlugin = ViewPlugin.fromClass(
-	class {
-		decorations: DecorationSet;
+export interface RainbowBracketsOptions {
+	colors?: readonly string[];
+	exactScanLimit?: number;
+	lookBehind?: number;
+}
 
-		constructor(view: EditorView) {
-			this.decorations = this.buildDecorations(view);
-		}
+interface BracketInfo {
+	char: string;
+	colorIndex: number;
+}
 
-		update(update: ViewUpdate) {
-			if (update.docChanged || update.viewportChanged) {
-				this.decorations = this.buildDecorations(update.view);
+function normalizeHexColor(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	const color = value.trim().toLowerCase();
+	if (/^#([\da-f]{3}|[\da-f]{6})$/.test(color)) return color;
+	return null;
+}
+
+function clampLookBehind(value: number | undefined): number {
+	if (!Number.isFinite(value)) return MAX_LOOK_BEHIND;
+	return Math.max(
+		MIN_LOOK_BEHIND,
+		Math.min(MAX_LOOK_BEHIND, Math.floor(value || 0)),
+	);
+}
+
+function getScanStart(
+	view: EditorView,
+	lookBehind: number,
+	exactScanLimit: number,
+): number {
+	const ranges = view.visibleRanges;
+	if (!ranges.length) return 0;
+
+	const firstVisibleFrom = ranges[0].from;
+	const lastVisibleTo = ranges[ranges.length - 1].to;
+	const docLength = view.state.doc.length;
+
+	if (docLength <= exactScanLimit || firstVisibleFrom <= exactScanLimit) {
+		return 0;
+	}
+
+	const visibleSpan = Math.max(1, lastVisibleTo - firstVisibleFrom);
+	const dynamicLookBehind = Math.max(
+		MIN_LOOK_BEHIND,
+		Math.min(MAX_LOOK_BEHIND, visibleSpan * 3),
+	);
+
+	return Math.max(
+		0,
+		firstVisibleFrom - Math.max(lookBehind, dynamicLookBehind),
+	);
+}
+
+function isOpeningBracket(char: string): boolean {
+	return char === "(" || char === "[" || char === "{";
+}
+
+function isSkipContext(name: string): boolean {
+	const lower = name.toLowerCase();
+	return (
+		lower.includes("string") ||
+		lower.includes("comment") ||
+		lower.includes("regexp") ||
+		lower.includes("regex") ||
+		lower.includes("regular")
+	);
+}
+
+function buildTheme(colors: readonly string[]) {
+	const themeSpec: Record<string, { color: string }> = {};
+
+	colors.forEach((color, index) => {
+		const selector = `.cm-rainbowBracket-${index}`;
+		themeSpec[selector] = { color: `${color} !important` };
+		themeSpec[`${selector} span`] = { color: `${color} !important` };
+	});
+
+	return EditorView.baseTheme(themeSpec);
+}
+
+export function getRainbowBracketColors(
+	themeConfig: RainbowBracketThemeConfig = {},
+): string[] {
+	const fallback = themeConfig.dark
+		? DEFAULT_DARK_COLORS
+		: DEFAULT_LIGHT_COLORS;
+	const colors: string[] = [];
+	const seen = new Set<string>();
+
+	for (const candidate of [
+		themeConfig.keyword,
+		themeConfig.type,
+		themeConfig.class,
+		themeConfig.function,
+		themeConfig.string,
+		themeConfig.number,
+		themeConfig.constant,
+		themeConfig.variable,
+		themeConfig.foreground,
+	]) {
+		const color = normalizeHexColor(candidate);
+		if (!color || seen.has(color)) continue;
+		seen.add(color);
+		colors.push(color);
+		if (colors.length === fallback.length) break;
+	}
+
+	if (colors.length < 4) {
+		return [...fallback];
+	}
+
+	for (const fallbackColor of fallback) {
+		if (colors.length === fallback.length) break;
+		if (seen.has(fallbackColor)) continue;
+		colors.push(fallbackColor);
+	}
+
+	return colors;
+}
+
+export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
+	const colors =
+		options.colors != null && options.colors.length > 0
+			? [...options.colors]
+			: getRainbowBracketColors();
+	const exactScanLimit = Math.max(
+		MIN_LOOK_BEHIND,
+		Math.floor(options.exactScanLimit || DEFAULT_EXACT_SCAN_LIMIT),
+	);
+	const lookBehind = clampLookBehind(options.lookBehind);
+	const theme = buildTheme(colors);
+	const marks = colors.map((_, index) =>
+		Decoration.mark({ class: `cm-rainbowBracket-${index}` }),
+	);
+
+	const rainbowBracketsPlugin = ViewPlugin.fromClass(
+		class {
+			decorations: DecorationSet;
+			raf = 0;
+			pendingView: EditorView | null = null;
+
+			constructor(view: EditorView) {
+				this.decorations = this.buildDecorations(view);
 			}
-		}
 
-		buildDecorations(view: EditorView): DecorationSet {
-			const decorations: { from: number; to: number; color: string }[] = [];
-			const tree = syntaxTree(view.state);
-
-			// Process only visible ranges for performance
-			for (const { from, to } of view.visibleRanges) {
-				this.processRange(view, tree, from, to, decorations);
+			update(update: ViewUpdate) {
+				if (!update.docChanged && !update.viewportChanged) return;
+				if (update.docChanged) {
+					this.decorations = this.decorations.map(update.changes);
+				}
+				this.scheduleBuild(update.view);
 			}
 
-			// Sort by position (required for Decoration.set)
-			decorations.sort((a, b) => a.from - b.from);
+			scheduleBuild(view: EditorView): void {
+				this.pendingView = view;
+				if (this.raf) return;
+				this.raf = requestAnimationFrame(() => {
+					this.raf = 0;
+					const pendingView = this.pendingView;
+					this.pendingView = null;
+					if (!pendingView) return;
+					this.decorations = this.buildDecorations(pendingView);
+					pendingView.dispatch({});
+				});
+			}
 
-			// Build decoration marks
-			const marks = decorations.map((d) =>
-				Decoration.mark({ class: `cm-bracket-${d.color}` }).range(d.from, d.to),
-			);
+			buildDecorations(view: EditorView): DecorationSet {
+				const visibleRanges = view.visibleRanges;
+				if (!visibleRanges.length || !marks.length) return Decoration.none;
 
-			return Decoration.set(marks);
-		}
+				const tree = syntaxTree(view.state);
+				if (tree.length <= 0) return Decoration.none;
 
-		processRange(
-			view: EditorView,
-			tree: ReturnType<typeof syntaxTree>,
-			from: number,
-			to: number,
-			decorations: { from: number; to: number; color: string }[],
-		): void {
-			const { doc } = view.state;
-			const openBrackets: BracketInfo[] = [];
+				const scanStart = getScanStart(view, lookBehind, exactScanLimit);
+				const scanEnd = visibleRanges[visibleRanges.length - 1].to;
+				const openBrackets: BracketInfo[] = [];
+				const builder = new RangeSetBuilder<Decoration>();
 
-			// Iterate through the document in the visible range
-			for (let pos = from; pos < to; pos++) {
-				const char = doc.sliceString(pos, pos + 1);
+				let visibleRangeIndex = 0;
+				const isVisible = (pos: number): boolean => {
+					while (
+						visibleRangeIndex < visibleRanges.length &&
+						pos >= visibleRanges[visibleRangeIndex].to
+					) {
+						visibleRangeIndex++;
+					}
+					const range = visibleRanges[visibleRangeIndex];
+					return !!range && pos >= range.from && pos < range.to;
+				};
 
-				// Check if this is a bracket character
-				if (!this.isBracketChar(char)) continue;
-
-				// Use syntax tree to check if this bracket should be colored
-				if (this.isInSkipContext(tree, pos)) continue;
-
-				if (char === "(" || char === "[" || char === "{") {
-					// Opening bracket - push to stack with current depth
-					openBrackets.push({
-						from: pos,
-						to: pos + 1,
-						depth: openBrackets.length,
-						char,
-					});
-				} else if (char === ")" || char === "]" || char === "}") {
-					// Closing bracket - find matching open bracket
-					const matchingOpen = this.getMatchingOpenBracket(char);
-					let matchFound = false;
-
-					// Search backwards for matching open bracket
-					for (let i = openBrackets.length - 1; i >= 0; i--) {
-						if (openBrackets[i].char === matchingOpen) {
-							const open = openBrackets[i];
-							const depth = open.depth;
-							const color = COLORS[depth % COLORS.length];
-
-							// Add decorations for both brackets
-							decorations.push(
-								{ from: open.from, to: open.to, color },
-								{ from: pos, to: pos + 1, color },
-							);
-
-							// Remove matched bracket and all unmatched brackets after it
-							openBrackets.splice(i);
-							matchFound = true;
-							break;
+				tree.iterate({
+					from: scanStart,
+					to: scanEnd,
+					enter(node) {
+						if (isSkipContext(node.name)) {
+							return false;
 						}
-					}
 
-					// If no match found, this is an unmatched closing bracket
-					if (!matchFound) {
-						// Unmatched closing bracket
-					}
+						const name = node.name;
+						if (
+							name === "(" ||
+							name === "[" ||
+							name === "{" ||
+							name === ")" ||
+							name === "]" ||
+							name === "}"
+						) {
+							const pos = node.from;
+
+							if (isOpeningBracket(name)) {
+								const colorIndex = openBrackets.length % marks.length;
+								if (isVisible(pos)) {
+									builder.add(pos, pos + 1, marks[colorIndex]);
+								}
+								openBrackets.push({ char: name, colorIndex });
+							} else {
+								const matchingOpen = CLOSING_TO_OPENING[name as ClosingBracket];
+								if (!matchingOpen) return;
+
+								for (let index = openBrackets.length - 1; index >= 0; index--) {
+									if (openBrackets[index].char !== matchingOpen) continue;
+
+									if (isVisible(pos)) {
+										builder.add(
+											pos,
+											pos + 1,
+											marks[openBrackets[index].colorIndex],
+										);
+									}
+									openBrackets.length = index;
+									break;
+								}
+							}
+						}
+					},
+				});
+
+				return builder.finish();
+			}
+
+			destroy(): void {
+				if (this.raf) {
+					cancelAnimationFrame(this.raf);
+					this.raf = 0;
 				}
+				this.pendingView = null;
 			}
-		}
+		},
+		{
+			decorations: (value) => value.decorations,
+		},
+	);
 
-		isBracketChar(char: string): boolean {
-			return (
-				char === "(" ||
-				char === ")" ||
-				char === "[" ||
-				char === "]" ||
-				char === "{" ||
-				char === "}"
-			);
-		}
-
-		isInSkipContext(tree: ReturnType<typeof syntaxTree>, pos: number): boolean {
-			let node: SyntaxNode | null = tree.resolveInner(pos, 1);
-
-			// Walk up the tree to check if we're inside a skip context
-			while (node) {
-				if (SKIP_CONTEXTS.has(node.name)) {
-					return true;
-				}
-				node = node.parent;
-			}
-
-			return false;
-		}
-
-		getMatchingOpenBracket(closing: string): string | null {
-			switch (closing) {
-				case ")":
-					return "(";
-				case "]":
-					return "[";
-				case "}":
-					return "{";
-				default:
-					return null;
-			}
-		}
-	},
-	{
-		decorations: (v) => v.decorations,
-	},
-);
-
-const theme = EditorView.baseTheme({
-	".cm-bracket-gold": { color: "#FFD700 !important" },
-	".cm-bracket-gold > span": { color: "#FFD700 !important" },
-	".cm-bracket-orchid": { color: "#DA70D6 !important" },
-	".cm-bracket-orchid > span": { color: "#DA70D6 !important" },
-	".cm-bracket-lightblue": { color: "#179FFF !important" },
-	".cm-bracket-lightblue > span": { color: "#179FFF !important" },
-});
-
-export function rainbowBrackets() {
 	return [rainbowBracketsPlugin, theme];
 }
 

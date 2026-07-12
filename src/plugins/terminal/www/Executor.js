@@ -12,6 +12,31 @@ class Executor {
   constructor(BackgroundExecutor = false) {
     this.ExecutorType = BackgroundExecutor ? "BackgroundExecutor" : "Executor";
   }
+
+  /**
+   * Spawns a process and exposes it as a raw WebSocket stream.
+   *
+   * @param {string[]} cmd - Command and arguments to execute (e.g. `["sh", "-c", "echo hi"]`).
+   * @param {(ws: WebSocket) => void} callback - Called with the connected WebSocket once the
+   *   process is ready. Use `ws.send()` to write to stdin and `ws.onmessage` to read stdout.
+   */
+  spawnStream(cmd, callback, onError) {
+    exec((port) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+      ws.binaryType = "arraybuffer";
+
+      ws.onopen = () => {
+        callback(ws);
+      };
+
+      ws.onerror = (e) => {
+        if (onError) onError(e);
+      };
+
+    }, (err) => { if (onError) onError(err); }, "Executor", "spawn", [cmd]);
+  }
+
+
   /**
    * Starts a shell process and enables real-time streaming of stdout, stderr, and exit status.
    *
@@ -146,10 +171,55 @@ class Executor {
   }
 
   /**
+   * Lists the processes currently managed by this executor.
+   *
+   * @returns {Promise<Array<{id: string, command: string, alpine: boolean, startedAt: number, background: boolean}>>}
+   */
+  listProcesses() {
+    return new Promise((resolve, reject) => {
+      exec(
+        (processes) => resolve(processes.map((process) => ({
+          ...process,
+          background: this.ExecutorType === "BackgroundExecutor",
+        }))),
+        reject,
+        this.ExecutorType,
+        "listProcesses",
+        []
+      );
+    });
+  }
+
+  /**
+   * Lists all running OS processes under the app's user ID.
+   *
+   * @returns {Promise<Array<{pid: number, ppid: number, name: string, command: string, state: string, memory: number, isSelf: boolean}>>}
+   */
+  listAllProcesses() {
+    return new Promise((resolve, reject) => {
+      exec(resolve, reject, this.ExecutorType, "listAllProcesses", []);
+    });
+  }
+
+  /**
+   * Forcefully kills a process by its native PID.
+   *
+   * @param {number} pid - Native process ID to kill.
+   * @returns {Promise<string>} Resolves when the process is terminated.
+   */
+  killProcess(pid) {
+    return new Promise((resolve, reject) => {
+      exec(resolve, reject, this.ExecutorType, "killProcess", [pid]);
+    });
+  }
+
+  /**
    * Stops the executor service completely.
    *
    * @returns {Promise<string>} Resolves when the service has been stopped.
    *
+   * Note: This does not gurantee that all running processes have been killed, but the service will no longer be active. Use with caution.
+   * 
    * @example
    * executor.stopService();
    */

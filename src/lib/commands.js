@@ -1,33 +1,18 @@
 import fsOperation from "fileSystem";
 import { selectAll } from "@codemirror/commands";
 import Sidebar from "components/sidebar";
-import { TerminalManager } from "components/terminal";
-import color from "dialogs/color";
 import confirm from "dialogs/confirm";
 import prompt from "dialogs/prompt";
 import select from "dialogs/select";
 import actions from "handlers/quickTools";
 import recents from "lib/recents";
-import About from "pages/about";
-import FileBrowser from "pages/fileBrowser";
-import plugins from "pages/plugins";
-import Problems from "pages/problems/problems";
-import openWelcomeTab from "pages/welcome/welcome";
-import changeEncoding from "palettes/changeEncoding";
-import changeMode from "palettes/changeMode";
-import changeTheme from "palettes/changeTheme";
-import commandPalette from "palettes/commandPalette";
-import findFile from "palettes/findFile";
-import browser from "plugins/browser";
-import help from "settings/helpSettings";
-import mainSettings from "settings/mainSettings";
-import { runAllTests } from "test/tester";
 import { getColorRange } from "utils/color/regex";
 import helpers from "utils/helpers";
 import Url from "utils/Url";
 import checkFiles from "./checkFiles";
-import constants from "./constants";
+import config from "./config";
 import EditorFile from "./editorFile";
+import { loadFileBrowser } from "./lazyImports";
 import openFile from "./openFile";
 import openFolder from "./openFolder";
 import run from "./run";
@@ -35,53 +20,136 @@ import saveState from "./saveState";
 import appSettings from "./settings";
 import showFileInfo from "./showFileInfo";
 
+function getTabCloseSelectionOptions() {
+	return {
+		unsavedWarning:
+			strings["unsaved selected tabs warning"] ||
+			"Some selected tabs are not saved. Choose what to do.",
+		saveLabel: strings["save selected tabs"] || "Save selected tabs",
+		closeLabel: strings["close selected tabs"] || "Close selected tabs",
+		saveWarning:
+			strings["save selected tabs warning"] ||
+			"Are you sure you want to save and close the selected tabs?",
+		closeWarning:
+			strings["close selected tabs warning"] ||
+			"Are you sure you want to close the selected tabs? You will lose the unsaved changes and this action cannot be reversed.",
+	};
+}
+
+function resolveReferenceFile(referenceFile) {
+	const { activeFile, getFile } = editorManager;
+
+	if (!referenceFile) return activeFile;
+	if (typeof referenceFile === "string") {
+		return getFile(referenceFile, "id") || activeFile;
+	}
+	if (referenceFile?.id) {
+		return getFile(referenceFile.id, "id") || referenceFile;
+	}
+
+	return referenceFile;
+}
+
+export function canSaveFile(file = editorManager.activeFile) {
+	return (
+		file?.type === "editor" &&
+		typeof file.save === "function" &&
+		typeof file.saveAs === "function"
+	);
+}
+
+function getTabsRelativeToFile(side, referenceFile) {
+	const file = resolveReferenceFile(referenceFile);
+	const files = editorManager.getPaneFiles?.(file) || editorManager.files;
+	const activeIndex = files.indexOf(file);
+
+	if (activeIndex === -1) return [];
+
+	switch (side) {
+		case "left":
+			return files.slice(0, activeIndex);
+		case "right":
+			return files.slice(activeIndex + 1);
+		case "others":
+			return files.filter((_, index) => index !== activeIndex);
+		default:
+			return [];
+	}
+}
+
+async function closeTabs(files, options = {}) {
+	const closableFiles = files.filter((file) => file && !file.pinned);
+	if (!closableFiles.length) return false;
+
+	const {
+		unsavedWarning = strings["unsaved files warning"],
+		saveLabel = strings["save all"],
+		closeLabel = strings["close all"],
+		saveWarning = strings["save all warning"],
+		closeWarning = strings["close all warning"],
+	} = options;
+
+	let save = false;
+	const unsavedFiles = closableFiles.filter((file) => file.isUnsaved).length;
+	if (unsavedFiles) {
+		const confirmation = await confirm(strings["warning"], unsavedWarning);
+		if (!confirmation) return false;
+
+		const option = await select(strings["select"], [
+			["save", saveLabel],
+			["close", closeLabel],
+			["cancel", strings["cancel"]],
+		]);
+		if (option === "cancel") return false;
+
+		if (option === "save") {
+			const doSave = await confirm(strings["warning"], saveWarning);
+			if (!doSave) return false;
+			save = true;
+		} else {
+			const doClose = await confirm(strings["warning"], closeWarning);
+			if (!doClose) return false;
+		}
+	}
+
+	for (const file of [...closableFiles]) {
+		if (save) {
+			await file.save();
+		}
+
+		await file.remove(true, { silentPinned: true });
+	}
+
+	return true;
+}
+
 export default {
 	async "run-tests"() {
+		const { runAllTests } = await import(
+			/* webpackChunkName: "tester" */ "test/tester"
+		);
 		await runAllTests();
 	},
 	async "close-all-tabs"() {
-		let save = false;
-		const unsavedFiles = editorManager.files.filter(
-			(file) => file.isUnsaved,
-		).length;
-		if (unsavedFiles) {
-			const confirmation = await confirm(
-				strings["warning"],
-				strings["unsaved files warning"],
-			);
-			if (!confirmation) return;
-			const option = await select(strings["select"], [
-				["save", strings["save all"]],
-				["close", strings["close all"]],
-				["cancel", strings["cancel"]],
-			]);
-			if (option === "cancel") return;
-
-			if (option === "save") {
-				const doSave = await confirm(
-					strings["warning"],
-					strings["save all warning"],
-				);
-				if (!doSave) return;
-				save = true;
-			} else {
-				const doClose = await confirm(
-					strings["warning"],
-					strings["close all warning"],
-				);
-				if (!doClose) return;
-			}
-		}
-
-		editorManager.files.forEach(async (file) => {
-			if (save) {
-				await file.save();
-				file.remove();
-				return;
-			}
-
-			file.remove(true);
-		});
+		await closeTabs(editorManager.files);
+	},
+	async "close-tabs-to-left"(referenceFile) {
+		await closeTabs(
+			getTabsRelativeToFile("left", referenceFile),
+			getTabCloseSelectionOptions(),
+		);
+	},
+	async "close-tabs-to-right"(referenceFile) {
+		await closeTabs(
+			getTabsRelativeToFile("right", referenceFile),
+			getTabCloseSelectionOptions(),
+		);
+	},
+	async "close-other-tabs"(referenceFile) {
+		await closeTabs(
+			getTabsRelativeToFile("others", referenceFile),
+			getTabCloseSelectionOptions(),
+		);
 	},
 	async "save-all-changes"() {
 		const doSave = await confirm(
@@ -95,7 +163,49 @@ export default {
 		});
 	},
 	"close-current-tab"() {
-		editorManager.activeFile.remove();
+		editorManager.activeFile?.remove();
+	},
+	"new-pane"() {
+		return editorManager.createPane?.();
+	},
+	"split-pane"() {
+		return editorManager.splitPane?.();
+	},
+	"split-pane-right"() {
+		return editorManager.splitPaneRight?.();
+	},
+	"split-pane-down"() {
+		return editorManager.splitPaneDown?.();
+	},
+	"close-pane"() {
+		return editorManager.closeActivePane?.();
+	},
+	"focus-next-pane"() {
+		return editorManager.focusNextPane?.();
+	},
+	"focus-previous-pane"() {
+		return editorManager.focusPreviousPane?.();
+	},
+	"focus-pane-left"() {
+		return editorManager.focusPaneByDirection?.("left");
+	},
+	"focus-pane-right"() {
+		return editorManager.focusPaneByDirection?.("right");
+	},
+	"focus-pane-up"() {
+		return editorManager.focusPaneByDirection?.("up");
+	},
+	"focus-pane-down"() {
+		return editorManager.focusPaneByDirection?.("down");
+	},
+	"move-tab-to-new-pane"() {
+		return editorManager.moveActiveFileToNewPane?.();
+	},
+	"move-tab-to-new-pane-down"() {
+		return editorManager.moveActiveFileToNewPane?.("vertical");
+	},
+	"toggle-pin-tab"(referenceFile) {
+		resolveReferenceFile(referenceFile)?.togglePinned?.();
 	},
 	console() {
 		run(true, "inapp");
@@ -104,7 +214,10 @@ export default {
 		if (!appSettings.value.checkFiles) return;
 		checkFiles();
 	},
-	"command-palette"() {
+	async "command-palette"() {
+		const { default: commandPalette } = await import(
+			/* webpackChunkName: "commandPalette" */ "palettes/commandPalette"
+		);
 		commandPalette();
 	},
 	"disable-fullscreen"() {
@@ -115,19 +228,28 @@ export default {
 		app.classList.add("fullscreen-mode");
 		this["resize-editor"]();
 	},
-	encoding() {
+	async encoding() {
+		const { default: changeEncoding } = await import(
+			/* webpackChunkName: "changeEncoding" */ "palettes/changeEncoding"
+		);
 		changeEncoding();
 	},
 	exit() {
 		navigator.app.exitApp();
 	},
 	"edit-with"() {
-		editorManager.activeFile.editWith();
+		const { activeFile } = editorManager;
+		if (!activeFile?.uri) return;
+		activeFile.editWith?.();
 	},
-	"find-file"() {
+	async "find-file"() {
+		const { default: findFile } = await import(
+			/* webpackChunkName: "findFile" */ "palettes/findFile"
+		);
 		findFile();
 	},
-	files() {
+	async files() {
+		const FileBrowser = await loadFileBrowser();
 		FileBrowser("both", strings["file browser"])
 			.then(FileBrowser.open)
 			.catch(FileBrowser.openError);
@@ -139,18 +261,21 @@ export default {
 		showFileInfo(url);
 	},
 	async goto() {
-		const res = await prompt(strings["enter line number"], "", "number", {
+		const lastLine = editorManager.editor?.state?.doc?.lines;
+		const message = lastLine
+			? `${strings["enter line number"]} (1..${lastLine})`
+			: strings["enter line number"];
+		const res = await prompt(message, "", "number", {
 			placeholder: "line.column",
 		});
 
 		if (!res) return;
 		const [lineStr, colStr] = String(res).split(".");
-		const { editor } = editorManager;
-		editor.gotoLine(lineStr, colStr);
+		editorManager.editor.gotoLine(lineStr, colStr);
 	},
 	async "new-file"() {
 		let filename = await prompt(strings["enter file name"], "", "filename", {
-			match: constants.FILE_NAME_REGEX,
+			match: config.FILE_NAME_REGEX,
 			required: true,
 		});
 
@@ -162,38 +287,60 @@ export default {
 		});
 	},
 	"next-file"() {
-		const len = editorManager.files.length;
-		let fileIndex = editorManager.files.indexOf(editorManager.activeFile);
+		const files =
+			editorManager.getPaneFiles?.(editorManager.activeFile) ||
+			editorManager.files;
+		const len = files.length;
+		let fileIndex = files.indexOf(editorManager.activeFile);
+
+		if (!len || fileIndex === -1) return;
 
 		if (fileIndex === len - 1) fileIndex = 0;
 		else ++fileIndex;
 
-		editorManager.files[fileIndex].makeActive();
+		files[fileIndex].makeActive();
 	},
-	open(page) {
+	"next-file-history"() {
+		editorManager.openNextEditorFromHistory?.();
+	},
+	async open(page) {
 		switch (page) {
 			case "settings":
-				mainSettings();
+				(
+					await import(
+						/* webpackChunkName: "mainSettings" */ "settings/mainSettings"
+					)
+				).default();
 				break;
 
 			case "help":
-				help();
+				(
+					await import(
+						/* webpackChunkName: "helpSettings" */ "settings/helpSettings"
+					)
+				).default();
 				break;
 
 			case "problems":
-				Problems();
+				(
+					await import(
+						/* webpackChunkName: "problems" */ "pages/problems/problems"
+					)
+				).default();
 				break;
 
 			case "plugins":
-				plugins();
+				(
+					await import(/* webpackChunkName: "plugins" */ "pages/plugins")
+				).default();
 				break;
 
 			case "file_browser":
-				FileBrowser();
+				(await loadFileBrowser())();
 				break;
 
 			case "about":
-				About();
+				(await import(/* webpackChunkName: "about" */ "pages/about")).default();
 				break;
 
 			default:
@@ -202,28 +349,40 @@ export default {
 		editorManager.editor.contentDOM.blur();
 	},
 	"open-with"() {
-		editorManager.activeFile.openWith();
+		const { activeFile } = editorManager;
+		if (!activeFile?.uri) return;
+		activeFile.openWith?.();
 	},
-	"open-file"() {
+	async "open-file"() {
 		editorManager.editor.contentDOM.blur();
+		const FileBrowser = await loadFileBrowser();
 		FileBrowser("file")
 			.then(FileBrowser.openFile)
 			.catch(FileBrowser.openFileError);
 	},
-	"open-folder"() {
+	async "open-folder"() {
 		editorManager.editor.contentDOM.blur();
+		const FileBrowser = await loadFileBrowser();
 		FileBrowser("folder")
 			.then(FileBrowser.openFolder)
 			.catch(FileBrowser.openFolderError);
 	},
 	"prev-file"() {
-		const len = editorManager.files.length;
-		let fileIndex = editorManager.files.indexOf(editorManager.activeFile);
+		const files =
+			editorManager.getPaneFiles?.(editorManager.activeFile) ||
+			editorManager.files;
+		const len = files.length;
+		let fileIndex = files.indexOf(editorManager.activeFile);
+
+		if (!len || fileIndex === -1) return;
 
 		if (fileIndex === 0) fileIndex = len - 1;
 		else --fileIndex;
 
-		editorManager.files[fileIndex].makeActive();
+		files[fileIndex].makeActive();
+	},
+	"prev-file-history"() {
+		editorManager.openPreviousEditorFromHistory?.();
 	},
 	"read-only"() {
 		const file = editorManager.activeFile;
@@ -252,20 +411,26 @@ export default {
 		// TODO : Codemirror
 		//editorManager.editor.resize(true);
 	},
-	"open-inapp-browser"(url) {
+	async "open-inapp-browser"(url) {
+		const { default: browser } = await import(
+			/* webpackChunkName: "browserPlugin" */ "plugins/browser"
+		);
 		browser.open(url);
 	},
 	run() {
-		editorManager.activeFile[
+		const { activeFile } = editorManager;
+		activeFile?.[
 			appSettings.value.useCurrentFileForPreview ? "runFile" : "run"
 		]?.();
 	},
 	"run-file"() {
-		editorManager.activeFile.runFile?.();
+		editorManager.activeFile?.runFile?.();
 	},
 	async save(showToast) {
 		try {
-			await editorManager.activeFile.save();
+			const { activeFile } = editorManager;
+			if (!canSaveFile(activeFile)) return;
+			await activeFile.save();
 			if (showToast) {
 				toast(strings["file saved"]);
 			}
@@ -275,7 +440,9 @@ export default {
 	},
 	async "save-as"(showToast) {
 		try {
-			await editorManager.activeFile.saveAs();
+			const { activeFile } = editorManager;
+			if (!canSaveFile(activeFile)) return;
+			await activeFile.saveAs();
 			if (showToast) {
 				toast(strings["file saved"]);
 			}
@@ -287,7 +454,9 @@ export default {
 		saveState();
 	},
 	share() {
-		editorManager.activeFile.share();
+		const { activeFile } = editorManager;
+		if (!activeFile?.uri) return;
+		activeFile.share?.();
 	},
 	async "pin-file-shortcut"() {
 		const file = editorManager.activeFile;
@@ -343,13 +512,22 @@ export default {
 			helpers.error(error);
 		}
 	},
-	syntax() {
+	async syntax() {
+		const { default: changeMode } = await import(
+			/* webpackChunkName: "changeMode" */ "palettes/changeMode"
+		);
 		changeMode();
 	},
-	"change-app-theme"() {
+	async "change-app-theme"() {
+		const { default: changeTheme } = await import(
+			/* webpackChunkName: "changeTheme" */ "palettes/changeTheme"
+		);
 		changeTheme("app");
 	},
-	"change-editor-theme"() {
+	async "change-editor-theme"() {
+		const { default: changeTheme } = await import(
+			/* webpackChunkName: "changeTheme" */ "palettes/changeTheme"
+		);
 		changeTheme("editor");
 	},
 	"toggle-fullscreen"() {
@@ -380,11 +558,19 @@ export default {
 
 		editor.contentDOM.blur();
 		const wasFocused = editorManager.activeFile.focused;
-		const res = await color(defaultColor, () => {
-			if (wasFocused) {
-				editor.focus();
-			}
-		});
+		let res;
+		try {
+			const { default: color } = await import(
+				/* webpackChunkName: "colorDialog" */ "dialogs/color"
+			);
+			res = await color(defaultColor, () => {
+				if (wasFocused) {
+					editor.focus();
+				}
+			});
+		} catch (_) {
+			return;
+		}
 
 		if (range) {
 			editor.dispatch({
@@ -410,13 +596,13 @@ export default {
 	async rename(file) {
 		file = file || editorManager.activeFile;
 
-		if (file.mode === "single") {
+		if (file.SAFMode === "single") {
 			alert(strings.info.toUpperCase(), strings["unable to rename"]);
 			return;
 		}
 
 		let newname = await prompt(strings.rename, file.filename, "filename", {
-			match: constants.FILE_NAME_REGEX,
+			match: config.FILE_NAME_REGEX,
 			capitalize: false,
 		});
 
@@ -464,13 +650,14 @@ export default {
 		}
 	},
 	async eol() {
+		if (editorManager.activeFile?.type !== "editor") return;
 		const eol = await select(strings["new line mode"], ["unix", "windows"], {
 			default: editorManager.activeFile.eol,
 		});
 		editorManager.activeFile.eol = eol;
 	},
 	"open-log-file"() {
-		openFile(Url.join(DATA_STORAGE, constants.LOG_FILE_NAME));
+		openFile(Url.join(DATA_STORAGE, config.LOG_FILE_NAME));
 	},
 	"copy-device-info"() {
 		let webviewInfo = {};
@@ -533,7 +720,6 @@ Additional Info:
 				// Copy the info to clipboard
 				if (cordova.plugins.clipboard) {
 					cordova.plugins.clipboard.copy(info);
-					toast(strings["copied to clipboard"]);
 				}
 			})
 			.catch((error) => {
@@ -543,13 +729,25 @@ Additional Info:
 	},
 	async "new-terminal"() {
 		try {
+			const { TerminalManager } = await import(
+				/* webpackChunkName: "terminal" */ "components/terminal"
+			);
 			await TerminalManager.createServerTerminal();
 		} catch (error) {
 			console.error("Failed to create terminal:", error);
 			window.toast("Failed to create terminal");
 		}
 	},
-	welcome() {
+	async "running-processes"() {
+		const { default: RunningProcesses } = await import(
+			"pages/runningProcesses"
+		);
+		RunningProcesses();
+	},
+	async welcome() {
+		const { default: openWelcomeTab } = await import(
+			/* webpackChunkName: "welcome" */ "pages/welcome/welcome"
+		);
 		openWelcomeTab();
 	},
 	async "toggle-inspector"() {
