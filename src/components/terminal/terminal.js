@@ -13,10 +13,9 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal as Xterm } from "@xterm/xterm";
 import {
 	executeCommand,
-	getResolvedKeyBindings,
+	getEffectiveKeyBindings,
 	getResolvedKeyBindingsVersion,
 } from "cm/commandRegistry";
-import toast from "components/toast";
 import confirm from "dialogs/confirm";
 import fonts from "lib/fonts";
 import appSettings from "lib/settings";
@@ -73,6 +72,8 @@ export default class TerminalComponent {
 		this.parsedAppKeybindings = [];
 		this.parsedAppKeybindingsVersion = -1;
 		this.boundNativeSelectionMenuHandler = null;
+		this.visibleScrollbarWidth = undefined;
+		this.lastRequestedServerSize = null;
 
 		this.init();
 	}
@@ -374,7 +375,7 @@ export default class TerminalComponent {
 
 		const parsedBindings = [];
 
-		Object.entries(getResolvedKeyBindings()).forEach(([name, binding]) => {
+		Object.entries(getEffectiveKeyBindings()).forEach(([name, binding]) => {
 			if (!binding.key) return;
 
 			// Skip editor-only keybindings in terminal
@@ -384,6 +385,11 @@ export default class TerminalComponent {
 			const keys = binding.key.split("|");
 
 			keys.forEach((keyCombo) => {
+				// CodeMirror supports multi-stroke chords, while xterm's keyboard
+				// callback receives one event at a time. Do not misread a chord as
+				// a single malformed terminal shortcut.
+				if (/\s/.test(keyCombo.trim())) return;
+
 				const parts = keyCombo.endsWith("-")
 					? [...keyCombo.slice(0, -1).split("-").filter(Boolean), "-"]
 					: keyCombo.split("-");
@@ -557,6 +563,10 @@ export default class TerminalComponent {
 		try {
 			// Open first to ensure a stable renderer is attached
 			this.terminal.open(container);
+			this.updateBackgroundColor();
+			this.updateScrollbarVisibility(
+				getTerminalSettings().showScrollbar !== false,
+			);
 
 			// Renderer selection: 'canvas' (default core), 'webgl', or 'auto'
 			if (
@@ -698,24 +708,11 @@ export default class TerminalComponent {
 					console.error,
 					terminalValues.failsafeMode,
 				);
-
-				// Check if AXS started with interval polling
-				const maxRetries = 10;
-				let retries = 0;
-				while (retries < maxRetries) {
-					await new Promise((resolve) => setTimeout(resolve, 1000));
-					if (await Terminal.isAxsRunning()) {
-						break;
-					}
-					retries++;
-				}
-
-				// If AXS still not running after retries, throw error
-				if (!(await Terminal.isAxsRunning())) {
-					toast("Failed to start AXS server after multiple attempts");
-					//throw new Error("Failed to start AXS server after multiple attempts");
-				}
 			}
+
+			// A live AXS process does not guarantee that its HTTP listener is ready.
+			// This is especially noticeable during a cold app start.
+			await this.waitForServerReady();
 
 			const requestBody = {
 				cols: this.terminal.cols,
@@ -746,6 +743,46 @@ export default class TerminalComponent {
 			console.error("Failed to create terminal session:", error);
 			throw error;
 		}
+	}
+
+	/**
+	 * Wait until the AXS HTTP server is accepting requests.
+	 * @param {number} maxAttempts - Maximum number of readiness checks
+	 * @param {number} retryDelay - Delay between checks in milliseconds
+	 */
+	async waitForServerReady(maxAttempts = 20, retryDelay = 500) {
+		const statusUrl = `http://127.0.0.1:${this.options.port}/status`;
+
+		for (let attempt = 0; attempt < maxAttempts; attempt++) {
+			try {
+				const response = await new Promise((resolve, reject) => {
+					cordova.plugin.http.sendRequest(
+						statusUrl,
+						{ method: "GET", responseType: "text" },
+						resolve,
+						reject,
+					);
+				});
+
+				if (
+					response.status >= 200 &&
+					response.status < 300 &&
+					response.data?.trim() === "OK"
+				) {
+					return;
+				}
+			} catch {
+				// Connection failures are expected while AXS is binding its port.
+			}
+
+			if (attempt < maxAttempts - 1) {
+				await new Promise((resolve) => setTimeout(resolve, retryDelay));
+			}
+		}
+
+		throw new Error(
+			`AXS terminal server did not become ready on port ${this.options.port}`,
+		);
 	}
 
 	/**
@@ -804,7 +841,7 @@ export default class TerminalComponent {
 
 				// Focus terminal and ensure it's ready
 				this.terminal.focus();
-				this.fit();
+				void this.fitAndResizeTerminal(true);
 
 				if (!settled) {
 					settled = true;
@@ -864,9 +901,13 @@ export default class TerminalComponent {
 	 * Resize terminal
 	 * @param {number} cols - Number of columns
 	 * @param {number} rows - Number of rows
+	 * @param {boolean} force - Send even if these dimensions were requested before
 	 */
-	async resizeTerminal(cols, rows) {
+	async resizeTerminal(cols, rows, force = false) {
 		if (!this.pid || !this.serverMode) return;
+		const resizeKey = `${cols}x${rows}`;
+		if (!force && this.lastRequestedServerSize === resizeKey) return;
+		this.lastRequestedServerSize = resizeKey;
 
 		try {
 			await new Promise((resolve, reject) => {
@@ -882,6 +923,9 @@ export default class TerminalComponent {
 				);
 			});
 		} catch (error) {
+			if (this.lastRequestedServerSize === resizeKey) {
+				this.lastRequestedServerSize = null;
+			}
 			console.error("Failed to resize terminal:", error);
 		}
 	}
@@ -892,6 +936,31 @@ export default class TerminalComponent {
 	fit() {
 		if (this.fitAddon) {
 			this.fitAddon.fit();
+		}
+	}
+
+	/**
+	 * Fit the client and immediately synchronize dimensions to the PTY.
+	 * @param {boolean} forceServerSync Sync even when fitting kept the same size
+	 */
+	async fitAndResizeTerminal(forceServerSync = false) {
+		if (!this.terminal || !this.fitAddon) return;
+
+		const previousCols = this.terminal.cols;
+		const previousRows = this.terminal.rows;
+		this.fit();
+
+		if (
+			this.serverMode &&
+			(forceServerSync ||
+				this.terminal.cols !== previousCols ||
+				this.terminal.rows !== previousRows)
+		) {
+			await this.resizeTerminal(
+				this.terminal.cols,
+				this.terminal.rows,
+				forceServerSync,
+			);
 		}
 	}
 
@@ -983,6 +1052,54 @@ export default class TerminalComponent {
 		}
 		this.options.theme = { ...this.options.theme, ...theme };
 		this.terminal.options.theme = this.options.theme;
+		this.updateBackgroundColor();
+	}
+
+	/** Keep xterm's viewport chrome aligned with the active theme. */
+	updateBackgroundColor() {
+		const background = this.terminal?.options.theme?.background;
+		if (!background) return;
+
+		if (this.container) this.container.style.background = background;
+		if (this.terminal?.element) {
+			this.terminal.element.style.backgroundColor = background;
+		}
+	}
+
+	/**
+	 * Toggle xterm.js 6's custom scrollbar without disabling scroll APIs.
+	 * @param {boolean} visible Whether the scrollbar should be shown
+	 */
+	updateScrollbarVisibility(visible) {
+		if (!this.terminal) return;
+
+		const overviewRuler = {
+			...(this.terminal.options.overviewRuler ?? {}),
+		};
+		if (visible === false) {
+			if (
+				!this.terminal.element?.classList.contains("terminal-scrollbar-hidden")
+			) {
+				this.visibleScrollbarWidth = overviewRuler.width;
+			}
+			// xterm 6 and FitAddon fall back to 14px when width is zero. A tiny,
+			// truthy width removes the gutter while CSS hides the remaining fraction.
+			overviewRuler.width = 0.001;
+		} else if (this.visibleScrollbarWidth === undefined) {
+			delete overviewRuler.width;
+		} else {
+			overviewRuler.width = this.visibleScrollbarWidth;
+		}
+		this.terminal.options.overviewRuler = overviewRuler;
+		this.terminal.element?.classList.toggle(
+			"terminal-scrollbar-hidden",
+			visible === false,
+		);
+
+		requestAnimationFrame(() => {
+			if (!this.terminal) return;
+			void this.fitAndResizeTerminal();
+		});
 	}
 
 	/**

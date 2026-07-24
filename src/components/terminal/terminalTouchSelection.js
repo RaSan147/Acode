@@ -190,10 +190,14 @@ export default class TerminalTouchSelection {
 		this.protectionTimeout = null;
 
 		// Scroll tracking
-		this.scrollElement = null;
+		this.terminalScrollDisposable = null;
 		this.isTerminalScrolling = false;
 		this.scrollEndTimeout = null;
 		this.scrollEndDelay = 100;
+		this.selectionRenderFrame = null;
+		this.selectionResizeTimeout = null;
+		this.orientationResizeTimeout = null;
+		this.resizeSettleDelay = 150;
 
 		this.init();
 	}
@@ -335,13 +339,8 @@ export default class TerminalTouchSelection {
 
 		// Terminal scroll listener
 		this.boundHandlers.terminalScroll = this.onTerminalScroll.bind(this);
-		this.scrollElement =
-			this.terminal.element.querySelector(".xterm-viewport") ||
-			this.terminal.element;
-		this.scrollElement.addEventListener(
-			"scroll",
+		this.terminalScrollDisposable = this.terminal.onScroll(
 			this.boundHandlers.terminalScroll,
-			{ passive: true },
 		);
 
 		// Terminal resize listener (for keyboard events)
@@ -469,6 +468,13 @@ export default class TerminalTouchSelection {
 		if (this.isPinching) {
 			this.endPinchZoom();
 			return;
+		}
+
+		// A long press can otherwise produce a compatibility mouse/click event
+		// after touchend. xterm 6 handles that event as a new selection gesture,
+		// which clears the range created by startSelection.
+		if (this.isSelecting && event.cancelable) {
+			event.preventDefault();
 		}
 
 		if (this.tapHoldTimeout) {
@@ -657,13 +663,23 @@ export default class TerminalTouchSelection {
 	}
 
 	onOrientationChange() {
-		// Update cell dimensions and handle positions after orientation change
-		setTimeout(() => {
+		// Keyboard animation emits a burst of window resize events. Only update
+		// handles after the geometry settles, and never resurrect handles while
+		// xterm's selection is temporarily cleared by its resize operation.
+		if (this.orientationResizeTimeout) {
+			clearTimeout(this.orientationResizeTimeout);
+		}
+		this.orientationResizeTimeout = setTimeout(() => {
+			this.orientationResizeTimeout = null;
 			this.updateCellDimensions();
-			if (this.isSelecting) {
+			if (
+				this.isSelecting &&
+				!this.selectionResizeTimeout &&
+				this.terminal.hasSelection()
+			) {
 				this.updateHandlePositions();
 			}
-		}, 100);
+		}, this.resizeSettleDelay);
 	}
 
 	onTerminalScroll() {
@@ -692,43 +708,51 @@ export default class TerminalTouchSelection {
 		}
 	}
 
-	onTerminalResize(size) {
-		// Handle terminal resize (keyboard open/close on Android)
-		setTimeout(() => {
-			this.updateCellDimensions();
-			if (this.isSelecting) {
-				// Don't clear selection if it's protected (during keyboard events)
-				if (this.selectionProtected) {
-					// Just update handle positions during protected period
-					this.updateHandlePositions();
-					return;
-				}
-
-				// Only clear selection if it becomes invalid due to actual content resize
-				// Don't clear selection for keyboard-related resizes
-				if (
-					this.selectionStart &&
-					this.selectionEnd &&
-					(this.selectionStart.row >= size.rows ||
-						this.selectionEnd.row >= size.rows)
-				) {
-					this.clearSelection();
-				} else if (this.isSelecting) {
-					// Maintain selection and update handle positions
-					this.updateHandlePositions();
-					// Temporarily hide context menu during resize but keep selection
-					if (this.contextMenu && this.contextMenu.style.display === "flex") {
-						this.hideContextMenu(true);
-					}
-					// Re-show context menu after resize if selection is still active
-					setTimeout(() => {
-						if (this.isSelecting && this.options.showContextMenu) {
-							this.showContextMenu();
-						}
-					}, 100);
-				}
+	onTerminalResize() {
+		// xterm 6 clears its selection on vertical resize. Debounce the keyboard's
+		// intermediate sizes, then restore our range using absolute buffer rows.
+		if (this.isSelecting) {
+			this.hideHandles();
+			this.hideContextMenu(true);
+			if (this.selectionRenderFrame) {
+				cancelAnimationFrame(this.selectionRenderFrame);
+				this.selectionRenderFrame = null;
 			}
-		}, 50);
+		}
+		if (this.selectionResizeTimeout) {
+			clearTimeout(this.selectionResizeTimeout);
+		}
+		this.selectionResizeTimeout = setTimeout(() => {
+			this.selectionResizeTimeout = null;
+			this.updateCellDimensions();
+			if (!this.isSelecting) return;
+
+			const start = this.selectionStart;
+			const end = this.selectionEnd;
+			const buffer = this.terminal.buffer.active;
+			if (
+				!start ||
+				!end ||
+				start.row < 0 ||
+				end.row < 0 ||
+				start.row >= buffer.length ||
+				end.row >= buffer.length ||
+				!buffer.getLine(start.row) ||
+				!buffer.getLine(end.row)
+			) {
+				// Invalid buffer coordinates must also remove our overlay handles,
+				// even while the selection is protected from keyboard side effects.
+				this.forceClearSelection();
+				return;
+			}
+
+			const lastColumn = Math.max(0, this.terminal.cols - 1);
+			start.col = Math.min(start.col, lastColumn);
+			end.col = Math.min(end.col, lastColumn);
+
+			this.hideContextMenu(true);
+			this.finalizeSelection();
+		}, this.resizeSettleDelay);
 	}
 
 	startSelection(touch) {
@@ -852,9 +876,25 @@ export default class TerminalTouchSelection {
 	}
 
 	finalizeSelection() {
-		if (this.options.showContextMenu && this.currentSelection) {
-			this.showContextMenu();
+		if (!this.isSelecting) return;
+
+		this.updateSelection();
+		this.currentSelection = this.terminal.getSelection();
+
+		if (this.selectionRenderFrame) {
+			cancelAnimationFrame(this.selectionRenderFrame);
 		}
+		this.selectionRenderFrame = requestAnimationFrame(() => {
+			this.selectionRenderFrame = null;
+			if (!this.isSelecting || !this.terminal) return;
+
+			// Reapply after any compatibility mouse events dispatched by WebView.
+			this.updateSelection();
+			this.currentSelection = this.terminal.getSelection();
+			if (this.options.showContextMenu && this.currentSelection) {
+				this.showContextMenu();
+			}
+		});
 	}
 
 	showHandles() {
@@ -1260,6 +1300,18 @@ export default class TerminalTouchSelection {
 			clearTimeout(this.scrollEndTimeout);
 			this.scrollEndTimeout = null;
 		}
+		if (this.selectionRenderFrame) {
+			cancelAnimationFrame(this.selectionRenderFrame);
+			this.selectionRenderFrame = null;
+		}
+		if (this.selectionResizeTimeout) {
+			clearTimeout(this.selectionResizeTimeout);
+			this.selectionResizeTimeout = null;
+		}
+		if (this.orientationResizeTimeout) {
+			clearTimeout(this.orientationResizeTimeout);
+			this.orientationResizeTimeout = null;
+		}
 
 		// Clear protection timeout
 		if (this.protectionTimeout) {
@@ -1545,13 +1597,8 @@ export default class TerminalTouchSelection {
 			this.boundHandlers.handleTouchEnd,
 		);
 
-		if (this.scrollElement) {
-			this.scrollElement.removeEventListener(
-				"scroll",
-				this.boundHandlers.terminalScroll,
-			);
-			this.scrollElement = null;
-		}
+		this.terminalScrollDisposable?.dispose();
+		this.terminalScrollDisposable = null;
 		window.removeEventListener(
 			"orientationchange",
 			this.boundHandlers.orientationChange,

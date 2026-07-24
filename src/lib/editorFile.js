@@ -1465,6 +1465,8 @@ export default class EditorFile {
 		// Store mode info for later use when creating editor view
 		this.currentMode = mode;
 		this.currentLanguageExtension = modeInfo?.getExtension() || null;
+		this.__cmCachedLanguageExtension = null;
+		this.__cmCachedLanguageSignature = null;
 		if (options.recommend !== false) {
 			maybeRecommendLanguageModeExtension(this, modeInfo);
 		}
@@ -1896,6 +1898,7 @@ export default class EditorFile {
 			tabSize: appSettings.value.tabSize,
 			softTab: appSettings.value.softTab,
 			textWrap: appSettings.value.textWrap,
+			wrappingIndent: appSettings.value.wrappingIndent,
 		};
 	}
 
