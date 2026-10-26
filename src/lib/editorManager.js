@@ -30,6 +30,14 @@ import {
 } from "@emmetio/codemirror6-plugin";
 import createBaseExtensions from "cm/baseExtensions";
 import {
+	getCanvasBackend,
+	getCanvasDisplayOptions,
+	getCanvasFont,
+	getCanvasTheme,
+	markCanvasViewSynced,
+	syncCanvasView,
+} from "cm/canvasOptions";
+import {
 	setKeyBindings as applyKeyBindings,
 	executeCommand,
 	getCommandKeymapExtension,
@@ -38,6 +46,16 @@ import {
 	registerExternalCommand,
 	removeExternalCommand,
 } from "cm/commandRegistry";
+import createEditorView, {
+	isCanvasRendererSupported,
+	isCanvasView,
+} from "cm/createEditorView";
+import {
+	blurEditorIfReadOnly,
+	createEditorReadOnlyExtension,
+	focusEditorIfEditable,
+	reconfigureEditorReadOnly,
+} from "cm/editorReadOnly";
 import { handleLineNumberClick } from "cm/lineNumberSelection";
 import localWordCompletions, {
 	localWordCompletionSource,
@@ -60,8 +78,11 @@ import {
 	getModesByName,
 	initModes,
 } from "cm/modelist";
-import createTouchSelectionMenu from "cm/touchSelectionMenu";
+import createTouchSelectionMenu, {
+	createCanvasSelectionMenu,
+} from "cm/touchSelectionMenu";
 import "cm/supportedModes";
+import { onProviderRegistered } from "fileSystem";
 import { autocompletion } from "@codemirror/autocomplete";
 import { serverCompletionSource } from "@codemirror/lsp-client";
 import colorView from "cm/colorView";
@@ -72,12 +93,12 @@ import {
 	restoreSelection,
 	setScrollPosition,
 } from "cm/editorUtils";
-import indentedLineWrapping from "cm/indentedLineWrapping";
+import { indentedLineWrapping } from "cm/indentedLineWrapping";
 import indentGuides from "cm/indentGuides";
 import { lineBreakMarker } from "cm/lineBreakMarker";
 import quickToolsModifierInput from "cm/quickToolsModifierInput";
 import rainbowBrackets, { getRainbowBracketColors } from "cm/rainbowBrackets";
-import scrollPastEndCustom from "cm/scrollPastEnd";
+import scrollPastEndCustom, { horizontalScrollPastEnd } from "cm/scrollPastEnd";
 import {
 	isMultiCursorSelectionActive as resolveMultiCursorSelectionActive,
 	isShiftSelectionActive as resolveShiftSelectionActive,
@@ -91,7 +112,7 @@ import SideButton, { sideButtonContainer } from "components/sideButton";
 import keyboardHandler, { keydownState } from "handlers/keyboard";
 import { animate } from "motion";
 import config from "./config";
-import EditorFile from "./editorFile";
+import EditorFile, { AUTO_SAVE } from "./editorFile";
 import openFile from "./openFile";
 import { addedFolder } from "./openFolder";
 import appSettings from "./settings";
@@ -135,6 +156,8 @@ async function EditorManager($header, $body) {
 	const PANE_SPLIT_VERTICAL = "vertical";
 
 	const docSyncTimers = new WeakMap();
+	// Preview text belongs to the loading view, not the file's saved session.
+	const loadingPreviews = new WeakMap();
 	let touchSelectionController = null;
 	let touchSelectionSyncRaf = 0;
 	let nativeContextMenuDisabled = null;
@@ -206,6 +229,7 @@ async function EditorManager($header, $body) {
 		"rename-file": [],
 		"save-file": [],
 		"file-loaded": [],
+		"file-loading-preview": [],
 		"file-content-changed": [],
 		"add-folder": [],
 		"remove-folder": [],
@@ -248,6 +272,7 @@ async function EditorManager($header, $body) {
 	const primaryPane = createPaneShell($container);
 	paneLayoutRoot = createPaneNode(primaryPane);
 	$paneRoot.append(paneLayoutRoot.element);
+	applyOpenFileListLayout();
 	const problemButton = SideButton({
 		text: strings.problems,
 		icon: "warningreport_problem",
@@ -707,6 +732,7 @@ async function EditorManager($header, $body) {
 			updateHeaderForFile(manager.activeFile);
 			if (isPaneTabLayout()) syncGlobalOpenFileListMirror();
 			updateActivePaneScrollbars();
+			updateSideButtonContainer();
 			toggleProblemButton();
 			if (options.emitSwitch !== false && manager.activeFile) {
 				recordHistory(manager.activeFile);
@@ -863,7 +889,7 @@ async function EditorManager($header, $body) {
 				selection: EditorSelection.cursor(pos),
 				userEvent: "select.pointer",
 			});
-			view.focus();
+			focusEditorIfEditable(view);
 			event.preventDefault();
 			return true;
 		},
@@ -948,9 +974,20 @@ async function EditorManager($header, $body) {
 	const languageCompartment = new Compartment();
 	// Compartment for LSP extensions so we can swap per file
 	const lspCompartment = new Compartment();
+	// The renderer is chosen at startup ("Renderer" in editor settings applies
+	// on reload). The canvas renderer draws line numbers, folding, guides,
+	// whitespace, wrapping and scroll room itself, so the option specs below
+	// leave those extensions out and canvas views get options instead.
+	let canvasRenderer = appSettings.value.editorRenderer === "canvas";
+	if (canvasRenderer && !isCanvasRendererSupported()) {
+		canvasRenderer = false;
+		console.warn("Canvas renderer needs WebGL2; using the DOM editor.");
+	}
 	const diagnosticsClientExt = lspDiagnosticsClientExtension();
 	const buildDiagnosticsUiExt = () =>
-		lspDiagnosticsUiExtension(appSettings?.value?.lintGutter !== false);
+		lspDiagnosticsUiExtension(appSettings?.value?.lintGutter !== false, {
+			canvas: canvasRenderer,
+		});
 	const UNTITLED_URI_PREFIX = "untitled://acode/";
 
 	function getEditorFontFamily() {
@@ -998,10 +1035,13 @@ async function EditorManager($header, $body) {
 
 	function makeFontTheme() {
 		const fontSize = appSettings?.value?.fontSize || "12px";
-		const lineHeight = appSettings?.value?.lineHeight || 1.6;
+		const lineHeight = appSettings?.value?.lineHeight || 1.4;
 		const fontFamily = getEditorFontFamily();
 		return EditorView.theme({
-			"&": { fontSize, lineHeight: String(lineHeight) },
+			"&": { fontSize },
+			// On the scroller, where CodeMirror's base theme sets 1.4: a line
+			// height on the editor itself never reached the lines or gutters.
+			".cm-scroller": { lineHeight: String(lineHeight) },
 			".cm-content": { fontFamily },
 			".cm-gutter": { fontFamily },
 			".cm-tooltip, .cm-tooltip *": { fontFamily },
@@ -1025,11 +1065,11 @@ async function EditorManager($header, $body) {
 	}
 
 	function makeWrapExtension() {
-		return appSettings?.value?.textWrap
-			? indentedLineWrapping({
-					mode: appSettings?.value?.wrappingIndent || "indent",
-				})
-			: [];
+		if (appSettings?.value?.textWrap)
+			return indentedLineWrapping(appSettings.value.wrappingIndent);
+		return horizontalScrollPastEnd(
+			Number(appSettings?.value?.leftMargin ?? 50),
+		);
 	}
 
 	function makeLineNumberExtension() {
@@ -1088,12 +1128,21 @@ async function EditorManager($header, $body) {
 
 	function getBaseExtensionOptions() {
 		const values = appSettings?.value || {};
-		return Object.fromEntries(
-			Object.entries(baseExtensionDefaults).map(([key, defaultValue]) => [
-				key,
-				values[key] ?? defaultValue,
-			]),
-		);
+		return {
+			...Object.fromEntries(
+				Object.entries(baseExtensionDefaults).map(([key, defaultValue]) => [
+					key,
+					values[key] ?? defaultValue,
+				]),
+			),
+			// Canvas views draw fold markers themselves; CodeMirror's fold
+			// gutter would only rebuild its (unused) markers on every update.
+			foldGutter: !canvasRenderer,
+			canvas: canvasRenderer,
+			// Off by default for the DOM editor (its cost per selection
+			// change); canvas views draw the matches cheaply.
+			...(canvasRenderer ? { highlightSelectionMatches: true } : {}),
+		};
 	}
 
 	function createConfiguredBaseExtensions() {
@@ -1102,9 +1151,12 @@ async function EditorManager($header, $body) {
 
 	function getBaseExtensionSignature() {
 		const options = getBaseExtensionOptions();
-		return JSON.stringify(
-			baseExtensionSettings.map((key) => [key, options[key]]),
-		);
+		// The renderer is part of it: states built for canvas views leave out
+		// what the canvas draws, so a DOM fallback must not reuse them.
+		return JSON.stringify([
+			...baseExtensionSettings.map((key) => [key, options[key]]),
+			["canvas", options.canvas],
+		]);
 	}
 
 	function makeRainbowBracketExtension() {
@@ -1149,6 +1201,7 @@ async function EditorManager($header, $body) {
 			keys: ["linenumbers", "relativeLineNumbers"],
 			compartments: [lineNumberCompartment],
 			build() {
+				if (canvasRenderer) return [];
 				return makeLineNumberExtension();
 			},
 		},
@@ -1156,6 +1209,7 @@ async function EditorManager($header, $body) {
 			keys: ["rainbowBrackets"],
 			compartments: [rainbowCompartment],
 			build() {
+				if (canvasRenderer) return [];
 				return makeRainbowBracketExtension();
 			},
 		},
@@ -1164,7 +1218,7 @@ async function EditorManager($header, $body) {
 			compartments: [indentGuidesCompartment],
 			build() {
 				const enabled = appSettings?.value?.indentGuides ?? false;
-				if (!enabled) return [];
+				if (!enabled || canvasRenderer) return [];
 				return indentGuides({
 					highlightActiveGuide: false,
 					hideOnBlankLines: false,
@@ -1189,6 +1243,7 @@ async function EditorManager($header, $body) {
 			keys: ["textWrap", "wrappingIndent"],
 			compartments: [wrapCompartment],
 			build() {
+				if (canvasRenderer) return [];
 				return makeWrapExtension();
 			},
 		},
@@ -1204,6 +1259,7 @@ async function EditorManager($header, $body) {
 			keys: ["rtlText"],
 			compartments: [rtlCompartment],
 			build() {
+				if (canvasRenderer) return [];
 				const rtl = !!appSettings?.value?.rtlText;
 				return EditorView.theme({
 					"&": { direction: rtl ? "rtl" : "ltr" },
@@ -1215,7 +1271,7 @@ async function EditorManager($header, $body) {
 			compartments: [whitespaceCompartment],
 			build() {
 				const show = !!appSettings?.value?.showSpaces;
-				return show
+				return show && !canvasRenderer
 					? [
 							highlightWhitespace(),
 							highlightTrailingWhitespace(),
@@ -1229,7 +1285,7 @@ async function EditorManager($header, $body) {
 			compartments: [lineBreakMarkerCompartment],
 			build() {
 				const showSpaces = !!appSettings?.value?.showSpaces;
-				return showSpaces ? lineBreakMarker : [];
+				return showSpaces && !canvasRenderer ? lineBreakMarker : [];
 			},
 		},
 		{
@@ -1237,7 +1293,7 @@ async function EditorManager($header, $body) {
 			compartments: [foldThemeCompartment],
 			build() {
 				const fade = !!appSettings?.value?.fadeFoldWidgets;
-				if (!fade) return [];
+				if (!fade || canvasRenderer) return [];
 				return EditorView.theme({
 					".cm-gutter.cm-foldGutter .cm-gutterElement": {
 						opacity: 0,
@@ -1281,7 +1337,7 @@ async function EditorManager($header, $body) {
 			compartments: [scrollPastEndCompartment],
 			build() {
 				const value = appSettings?.value?.scrollPastEnd || "medium";
-				if (value === "none") {
+				if (value === "none" || canvasRenderer) {
 					return [];
 				}
 				const factorMap = {
@@ -1365,7 +1421,107 @@ async function EditorManager($header, $body) {
 				}
 				target.dispatch({ effects });
 			}
+			if (isCanvasView(target)) syncCanvasOptions(target);
 		}
+	}
+
+	function getCanvasDisplayOptionsFromSettings() {
+		return getCanvasDisplayOptions(appSettings.value, {
+			themeId: appSettings.value.editorTheme || "one_dark",
+			onLineNumberClick: handleCanvasLineNumberClick,
+		});
+	}
+
+	/** Apply the current settings to a canvas view (only what changed). */
+	function syncCanvasOptions(target) {
+		syncCanvasView(target, {
+			display: getCanvasDisplayOptionsFromSettings(),
+			font: getCanvasFont(appSettings.value, getEditorFontFamily()),
+		});
+	}
+
+	function syncAllCanvasViews() {
+		for (const pane of panes) {
+			if (isCanvasView(pane.editor)) syncCanvasOptions(pane.editor);
+		}
+	}
+
+	/**
+	 * Taps on a canvas view's line numbers select the line, like the DOM
+	 * editor's line number gutter. Its fold markers sit in a narrow column
+	 * right of the numbers: taps there fall through to the fold toggle.
+	 */
+	function handleCanvasLineNumberClick(line, event, view) {
+		const rect = view.scrollDOM.getBoundingClientRect();
+		const foldColumn = view.gutterWidth - view.cellWidth * 1.5;
+		if (event.clientX - rect.left >= foldColumn) return false;
+		const docLine = view.state.doc.line(line);
+		return handleLineNumberClick(view, view.lineBlockAt(docLine.from), event, {
+			shiftClickSelection: appSettings.value.shiftClickSelection !== false,
+		});
+	}
+
+	/**
+	 * Create a pane's editor view with the configured renderer. Canvas views
+	 * get the settings as options, and drive the selection menu through their
+	 * touch selection hooks.
+	 */
+	function createPaneEditorView(pane, state, parent) {
+		if (!canvasRenderer) return createEditorView({ state, parent });
+		const themeId = appSettings.value.editorTheme || "one_dark";
+		const display = getCanvasDisplayOptionsFromSettings();
+		const font = getCanvasFont(appSettings.value, getEditorFontFamily());
+		try {
+			const view = createEditorView({
+				state,
+				parent,
+				canvas: {
+					...display,
+					font,
+					theme: getCanvasTheme(themeId),
+					backend: getCanvasBackend(appSettings.value),
+					input: appSettings.value.useTextareaForIME ? "textarea" : "auto",
+					touchSelection: {
+						onMenu: (event) =>
+							pane.touchSelectionController?.handleCanvasMenu?.(event),
+						onHaptic() {
+							if (appSettings.value.vibrateOnTap) {
+								navigator.vibrate?.(config.VIBRATION_TIME);
+							}
+						},
+					},
+				},
+			});
+			markCanvasViewSynced(view, { display, font, themeId });
+			return view;
+		} catch (error) {
+			// Use the DOM editor for the rest of the session, with the
+			// extensions the canvas would have drawn.
+			canvasRenderer = false;
+			for (const leftover of parent.querySelectorAll(":scope > .cv-editor")) {
+				leftover.remove();
+			}
+			warnRecoverable(
+				"Canvas renderer failed to start; using the DOM editor.",
+				error,
+				"canvas-renderer",
+			);
+			// Panes start with an empty state; rebuild it with the DOM
+			// editor's extensions. Files' states follow on their next show,
+			// since the renderer is in their extension signature.
+			const view = createEditorView({
+				state: createEmptyEditorState(),
+				parent,
+			});
+			applyOptions(null, view);
+			return view;
+		}
+	}
+
+	function createPaneTouchSelectionMenu(view, options) {
+		return isCanvasView(view)
+			? createCanvasSelectionMenu(view, options)
+			: createTouchSelectionMenu(view, options);
 	}
 
 	function setThemeForEditors(themeId) {
@@ -1394,6 +1550,7 @@ async function EditorManager($header, $body) {
 	async function configureLspForFile(file) {
 		const pane = getFileLspPane(file);
 		if (!pane?.editor || pane.activeFile?.id !== file?.id) return;
+		if (!file.loaded || file.loading) return;
 		const targetEditor = pane.editor;
 		const metadata = buildLspMetadata(file, targetEditor);
 		const token = ++pane.lspRequestToken;
@@ -1569,6 +1726,10 @@ async function EditorManager($header, $body) {
 						next.clientConfig = {
 							...current.clientConfig,
 							...config.clientConfig,
+							builtinExtensions: {
+								...(current.clientConfig?.builtinExtensions || {}),
+								...(config.clientConfig.builtinExtensions || {}),
+							},
 						};
 					}
 					if (
@@ -1658,7 +1819,7 @@ async function EditorManager($header, $body) {
 				searchExtension: search(),
 				// Ensure read-only can be toggled later via compartment
 				readOnlyExtension: readOnlyCompartment.of(
-					EditorState.readOnly.of(false),
+					createEditorReadOnlyExtension(false, { canvas: canvasRenderer }),
 				),
 				// Editor options driven by settings via compartments
 				optionExtensions: getBaseExtensionsFromOptions(),
@@ -1668,10 +1829,7 @@ async function EditorManager($header, $body) {
 
 	const editorState = createEmptyEditorState();
 
-	editor = new EditorView({
-		state: editorState,
-		parent: $container,
-	});
+	editor = createPaneEditorView(primaryPane, editorState, $container);
 	editor.__editorPane = primaryPane;
 	primaryPane.editor = editor;
 	activePane = primaryPane;
@@ -1717,7 +1875,7 @@ async function EditorManager($header, $body) {
 		},
 	});
 
-	touchSelectionController = createTouchSelectionMenu(editor, {
+	touchSelectionController = createPaneTouchSelectionMenu(editor, {
 		container: $container,
 		getActiveFile: () => manager?.activeFile || null,
 		isShiftSelectionActive,
@@ -1755,6 +1913,9 @@ async function EditorManager($header, $body) {
 			const id = String(themeId || "");
 			const ext = getThemeExtensions(id, [oneDark]);
 			targetEditor.dispatch({ effects: themeCompartment.reconfigure(ext) });
+			if (isCanvasView(targetEditor)) {
+				syncCanvasView(targetEditor, { themeId: id });
+			}
 			return true;
 		} catch (_) {
 			return false;
@@ -1839,13 +2000,7 @@ async function EditorManager($header, $body) {
 			const col = Math.max(0, Math.min(targetColumn, docLine.length));
 			const pos = docLine.from + col;
 
-			// Move cursor and scroll into view
-			editor.dispatch({
-				selection: { anchor: pos, head: pos },
-				effects: EditorView.scrollIntoView(pos, { y: "center" }),
-			});
-			editor.focus();
-			return true;
+			return revealEditorRange(editor, pos);
 		} catch (error) {
 			console.error("Error in gotoLine:", error);
 			return false;
@@ -2170,12 +2325,7 @@ async function EditorManager($header, $body) {
 						const col = Math.max(0, Math.min(targetColumn, docLine.length));
 						const pos = docLine.from + col;
 
-						targetEditor.dispatch({
-							selection: { anchor: pos, head: pos },
-							effects: EditorView.scrollIntoView(pos, { y: "center" }),
-						});
-						targetEditor.focus();
-						return true;
+						return revealEditorRange(targetEditor, pos);
 					} catch (error) {
 						console.error("Error in gotoLine:", error);
 						return false;
@@ -2401,15 +2551,16 @@ async function EditorManager($header, $body) {
 	}
 
 	async function createPaneEditor(pane) {
-		const paneEditor = new EditorView({
-			state: createEmptyEditorState(),
-			parent: pane.editorContainer,
-		});
+		const paneEditor = createPaneEditorView(
+			pane,
+			createEmptyEditorState(),
+			pane.editorContainer,
+		);
 		pane.editor = paneEditor;
 		paneEditor.__editorPane = pane;
 		applyEditorCompatibility(paneEditor);
 		await applyKeyBindings(paneEditor);
-		pane.touchSelectionController = createTouchSelectionMenu(paneEditor, {
+		pane.touchSelectionController = createPaneTouchSelectionMenu(paneEditor, {
 			container: pane.editorContainer,
 			getActiveFile: () => pane.activeFile || null,
 			isShiftSelectionActive,
@@ -2811,9 +2962,7 @@ async function EditorManager($header, $body) {
 		}
 		try {
 			const ro = !file.editable || !!file.loading;
-			targetEditor.dispatch({
-				effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(ro)),
-			});
+			reconfigureEditorReadOnly(targetEditor, readOnlyCompartment, ro);
 			file.session = targetEditor.state;
 		} catch (error) {
 			warnRecoverable(
@@ -2824,20 +2973,24 @@ async function EditorManager($header, $body) {
 		}
 	}
 
-	function showLoadingEditor(file) {
+	function showLoadingEditor(file, text = loadingPreviews.get(file)) {
 		const loadingState = EditorState.create({
-			doc: "",
+			doc: text ?? "",
 			extensions: [
 				themeCompartment.of(getConfiguredThemeExtension()),
 				...getBaseExtensionsFromOptions(),
 				languageCompartment.of([]),
 				lspCompartment.of([]),
-				readOnlyCompartment.of(EditorState.readOnly.of(true)),
-				EditorView.editable.of(false),
-				placeholder(`Loading ${file.filename || "file"}...`),
+				readOnlyCompartment.of(
+					createEditorReadOnlyExtension(true, { canvas: canvasRenderer }),
+				),
+				...(text === undefined
+					? [placeholder(`Loading ${file.filename || "file"}...`)]
+					: []),
 			],
 		});
 		editor.setState(loadingState);
+		blurEditorIfReadOnly(editor, true);
 		touchSelectionController?.onSessionChanged();
 	}
 
@@ -2890,6 +3043,11 @@ async function EditorManager($header, $body) {
 	// Helper: apply a file's content and language to the editor view
 	function applyFileToEditor(file, options = {}) {
 		if (!file || file.type !== "editor") return;
+		if (!file.loaded || file.loading) {
+			showLoadingEditor(file);
+			return;
+		}
+		loadingPreviews.delete(file);
 		const {
 			forceRecreate = false,
 			restoreScroll = true,
@@ -2967,7 +3125,11 @@ async function EditorManager($header, $body) {
 		// Apply read-only state based on file.editable/loading using Compartment
 		try {
 			const ro = !file.editable || !!file.loading;
-			exts.push(readOnlyCompartment.of(EditorState.readOnly.of(ro)));
+			exts.push(
+				readOnlyCompartment.of(
+					createEditorReadOnlyExtension(ro, { canvas: canvasRenderer }),
+				),
+			);
 		} catch (e) {
 			// safe to ignore; editor will remain editable by default
 		}
@@ -3009,9 +3171,19 @@ async function EditorManager($header, $body) {
 		// Restore folds from previous state if available
 		try {
 			const folds = prevState ? getAllFolds(prevState) : [];
+			const canConsumeRestoredFolds = file.loaded && !file.loading;
+			if (
+				!folds.length &&
+				canConsumeRestoredFolds &&
+				file.restoredFolds?.length
+			) {
+				folds.push(...file.restoredFolds);
+			}
 			if (folds && folds.length) {
 				restoreFolds(editor, folds);
+				file.session = editor.state;
 			}
+			if (canConsumeRestoredFolds) file.restoredFolds = null;
 		} catch (error) {
 			warnRecoverable(
 				"Failed to restore folded regions from previous session state.",
@@ -3173,6 +3345,9 @@ async function EditorManager($header, $body) {
 		hasUnsavedFiles,
 		getEditorHeight,
 		getEditorWidth,
+		revealRange(from, to = from, options) {
+			return revealEditorRange(manager.editor, from, to, options);
+		},
 		header: $header,
 		openPreviousEditorFromHistory,
 		openNextEditorFromHistory,
@@ -3276,7 +3451,7 @@ async function EditorManager($header, $body) {
 			diagnosticsButtonSyncRaf = requestAnimationFrame(() => {
 				diagnosticsButtonSyncRaf = 0;
 				const active = manager.activeFile;
-				if (active?.type === "editor") {
+				if (active?.type === "editor" && active.loaded && !active.loading) {
 					active.session = editor.state;
 				}
 				toggleProblemButton();
@@ -3290,8 +3465,22 @@ async function EditorManager($header, $body) {
 
 	lspClientManager.setOptions({
 		resolveRoot: resolveRootUriForContext,
-		onClientIdle: ({ server }) => {
-			if (server?.id) stopManagedServer(server.id);
+		onClientIdle: ({ server, dispose }) => {
+			if (!server?.id || typeof dispose !== "function") return;
+			// Dispose only this idle client. disposeServer(server.id) would tear
+			// down every workspace sharing the server id (e.g. web-worker LSPs).
+			void (async () => {
+				await dispose();
+				const stillActive = lspClientManager
+					.getActiveClients()
+					.some(
+						(state) =>
+							state.server?.id?.toLowerCase() === server.id.toLowerCase(),
+					);
+				if (!stillActive) {
+					stopManagedServer(server.id);
+				}
+			})();
 		},
 		displayFile: async (targetUri) => {
 			if (!targetUri) return null;
@@ -3385,9 +3574,12 @@ async function EditorManager($header, $body) {
 		updateMargin();
 		applyOptions(["textWrap"]);
 	});
-
 	appSettings.on("update:wrappingIndent", function () {
 		applyOptions(["wrappingIndent"]);
+	});
+
+	appSettings.on("update:leftMargin", function () {
+		applyOptions(["textWrap"]);
 	});
 
 	function updateEditorIndentationSettings() {
@@ -3411,12 +3603,51 @@ async function EditorManager($header, $body) {
 
 	function recreateActiveEditorState() {
 		const file = manager.activeFile;
-		if (file?.type !== "editor") return;
+		if (file?.type !== "editor" || !file.loaded || file.loading) return;
 
 		file.session = editor.state;
 		file.lastScrollTop = editor.scrollDOM?.scrollTop ?? 0;
 		file.lastScrollLeft = editor.scrollDOM?.scrollLeft ?? 0;
 		applyFileToEditor(file, { forceRecreate: true });
+	}
+
+	/**
+	 * Reveal an editor range after a file switch.
+	 *
+	 * File activation restores the tab's saved viewport over two animation
+	 * frames and a short timeout. Explicit navigation must cancel that work or
+	 * it can overwrite CodeMirror's scrollIntoView effect while leaving the new
+	 * selection in place.
+	 */
+	function revealEditorRange(
+		targetEditor,
+		from,
+		to = from,
+		{ y = "center", userEvent = "select.reveal" } = {},
+	) {
+		if (!targetEditor) return false;
+
+		try {
+			const length = targetEditor.state.doc.length;
+			const anchor = Math.max(0, Math.min(Number(from) || 0, length));
+			const head = Math.max(0, Math.min(Number(to) || 0, length));
+
+			if (targetEditor === editor) {
+				cancelPendingScrollRestore();
+				clearScrollbarScrollLock();
+			}
+
+			targetEditor.dispatch({
+				selection: { anchor, head },
+				effects: EditorView.scrollIntoView(anchor, { y }),
+				userEvent,
+			});
+			focusEditorIfEditable(targetEditor);
+			return true;
+		} catch (error) {
+			console.error("Error revealing editor range:", error);
+			return false;
+		}
 	}
 
 	appSettings.on("update:tabSize", function () {
@@ -3528,7 +3759,9 @@ async function EditorManager($header, $body) {
 
 	appSettings.on("update:lintGutter", function (value) {
 		lspClientManager.setOptions({
-			diagnosticsUiExtension: lspDiagnosticsUiExtension(value !== false),
+			diagnosticsUiExtension: lspDiagnosticsUiExtension(value !== false, {
+				canvas: canvasRenderer,
+			}),
 		});
 		const active = manager.activeFile;
 		if (active?.type === "editor") {
@@ -3575,6 +3808,15 @@ async function EditorManager($header, $body) {
 	appSettings.on("update:indentGuides", function () {
 		applyOptions(["indentGuides"]);
 	});
+
+	// Options only the canvas renderer applies live; the DOM editor picks up
+	// highlightActiveLine when the state is recreated.
+	appSettings.on("update:highlightActiveLine", syncAllCanvasViews);
+	appSettings.on("update:scrollSpeed", syncAllCanvasViews);
+	appSettings.on("update:stickyScroll", syncAllCanvasViews);
+	appSettings.on("update:stickyScrollMaxLines", syncAllCanvasViews);
+	appSettings.on("update:cursorBlinkRate", syncAllCanvasViews);
+	appSettings.on("update:canvasGutterMarkers", syncAllCanvasViews);
 
 	// Keep file.session and cache in sync on every edit
 	function getDocSyncListener() {
@@ -3626,7 +3868,7 @@ async function EditorManager($header, $body) {
 				if (file.uri && file.isUnsaved && autosave) {
 					timers.autosaveTimeout = setTimeout(() => {
 						timers.autosaveTimeout = null;
-						file.save()?.catch?.((error) => {
+						file.save(AUTO_SAVE)?.catch?.((error) => {
 							warnRecoverable(
 								`Failed to autosave ${file.filename || file.uri}`,
 								error,
@@ -3642,6 +3884,20 @@ async function EditorManager($header, $body) {
 	}
 
 	// Register critical listeners
+	onProviderRegistered((test) => {
+		for (const file of manager.files) {
+			if (
+				file.type === "editor" &&
+				file.tab &&
+				!file.loaded &&
+				file.uri &&
+				test(file.uri)
+			) {
+				void file.load().catch(console.error);
+			}
+		}
+	});
+
 	manager.on(["file-loaded"], (file) => {
 		if (!file || file.type !== "editor") return;
 		const pane = getFilePane(file);
@@ -3649,6 +3905,19 @@ async function EditorManager($header, $body) {
 			applyFileToPaneEditor(file, pane);
 		} else if (manager.activeFile?.id === file.id) {
 			applyFileToEditor(file);
+		}
+	});
+
+	manager.on(["file-loading-preview"], (file, text) => {
+		if (!file || file.type !== "editor" || !file.loading || !file.tab) return;
+		loadingPreviews.set(file, text);
+		const pane = getFilePane(file);
+		if (!pane?.editor || pane.activeFile?.id !== file.id) return;
+
+		if (pane === getActivePane()) {
+			showLoadingEditor(file, text);
+		} else {
+			withPaneEditorContext(pane, () => showLoadingEditor(file, text));
 		}
 	});
 
@@ -3661,10 +3930,8 @@ async function EditorManager($header, $body) {
 		const file = manager.activeFile;
 		if (file?.type !== "editor") return;
 		try {
-			const ro = !file.editable || !!file.loading;
-			editor.dispatch({
-				effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(ro)),
-			});
+			const ro = !file.editable || !file.loaded || file.loading;
+			reconfigureEditorReadOnly(editor, readOnlyCompartment, ro);
 			touchSelectionController?.onStateChanged();
 		} catch (error) {
 			warnRecoverable(
@@ -3678,6 +3945,7 @@ async function EditorManager($header, $body) {
 	});
 
 	manager.on(["remove-file"], (file) => {
+		loadingPreviews.delete(file);
 		removeFileFromHistory(file);
 		clearDocSyncTimers(file);
 		detachLspForFile(file);
@@ -3924,8 +4192,8 @@ async function EditorManager($header, $body) {
 	}
 
 	function syncOpenFileList() {
+		applyOpenFileListLayout();
 		if (isPaneTabLayout()) {
-			$paneRoot.classList.remove("hide-pane-tabs");
 			panes.forEach((pane) => {
 				const preserveCurrentTabOrder = !!pane.tabList.querySelector(
 					'[data-editor-tab-dragging="true"]',
@@ -3941,7 +4209,6 @@ async function EditorManager($header, $body) {
 			return;
 		}
 
-		$paneRoot.classList.add("hide-pane-tabs");
 		if (!$openFileList || $openFileList === $globalOpenFileList) {
 			initFileTabContainer();
 		}
@@ -4061,7 +4328,12 @@ async function EditorManager($header, $body) {
 			return true;
 		}
 
-		if (sourcePane?.activeFile?.id === file.id && file.type === "editor") {
+		if (
+			sourcePane?.activeFile?.id === file.id &&
+			file.type === "editor" &&
+			file.loaded &&
+			!file.loading
+		) {
 			const sourceEditor = sourcePane.editor;
 			file.session = getRawEditorState(sourceEditor?.state);
 			file.lastScrollTop = sourceEditor?.scrollDOM?.scrollTop || 0;
@@ -4163,6 +4435,26 @@ async function EditorManager($header, $body) {
 		);
 	}
 
+	function applyOpenFileListLayout(
+		openFileListPos = appSettings.value.openFileListPos,
+	) {
+		const showPaneTabs =
+			openFileListPos === appSettings.OPEN_FILE_LIST_POS_HEADER ||
+			openFileListPos === appSettings.OPEN_FILE_LIST_POS_BOTTOM;
+
+		$paneRoot.classList.toggle("hide-pane-tabs", !showPaneTabs);
+		if (openFileListPos === appSettings.OPEN_FILE_LIST_POS_BOTTOM) {
+			$paneRoot.dataset.tabsPosition = "bottom";
+		} else if (openFileListPos === appSettings.OPEN_FILE_LIST_POS_HEADER) {
+			// Header mode is rendered as the pane's top tab bar.
+			$paneRoot.dataset.tabsPosition = "top";
+		} else {
+			// Sidebar mode has no pane tab placement.
+			delete $paneRoot.dataset.tabsPosition;
+		}
+		root.setAttribute("open-file-list-pos", openFileListPos);
+	}
+
 	/**
 	 * Sets up the editor with various configurations and event listeners.
 	 * @returns {Promise<void>} A promise that resolves once the editor is set up.
@@ -4172,12 +4464,7 @@ async function EditorManager($header, $body) {
 		const touchSelectionController = pane?.touchSelectionController;
 		if (!pane || !editor) return;
 		const settings = appSettings.value;
-		const { leftMargin, textWrap, colorPreview, fontSize, lineHeight } =
-			appSettings.value;
-		const scrollMarginTop = 0;
-		const scrollMarginLeft = 0;
-		const scrollMarginRight = textWrap ? 0 : leftMargin;
-		const scrollMarginBottom = 0;
+		const { colorPreview, fontSize, lineHeight } = appSettings.value;
 
 		let scrollTimeout;
 		let scrollSyncRaf = 0;
@@ -4189,9 +4476,14 @@ async function EditorManager($header, $body) {
 		function syncScrollUi() {
 			if (pane !== activePane) return;
 			scrollSyncRaf = 0;
+			if (pane.activeFile?.type !== "editor") {
+				$hScrollbar.hideImmediately();
+				$vScrollbar.hideImmediately();
+				return;
+			}
 			editor.requestMeasure({
 				read: () => readScrollMetrics(),
-				write: updateScrollbarsFromMetrics,
+				write: (metrics) => updateScrollbarsFromMetrics(metrics, pane),
 			});
 		}
 
@@ -4230,6 +4522,56 @@ async function EditorManager($header, $body) {
 
 		// Attach native DOM event listeners directly to the editor's contentDOM
 		const contentDOM = editor.contentDOM;
+		let readOnlyNativeContextActive = false;
+		let readOnlyNativeContextResetTimer = null;
+		const isReadOnlyEditor = () => {
+			const activeFile = pane.activeFile;
+			return (
+				editor.state.readOnly ||
+				activeFile?.editable === false ||
+				!!activeFile?.loading
+			);
+		};
+		const clearFileFocusState = () => {
+			const activeFile = pane.activeFile;
+			if (!activeFile) return;
+			activeFile.focused = false;
+			activeFile.focusedBefore = false;
+		};
+		const clearPendingKeyboardHideBlur = () => {
+			if (!pendingKeyboardHideBlur) return;
+			keyboardHandler.off("keyboardHide", pendingKeyboardHideBlur);
+			pendingKeyboardHideBlur = null;
+		};
+		const releaseReadOnlyNativeContext = () => {
+			clearTimeout(readOnlyNativeContextResetTimer);
+			readOnlyNativeContextResetTimer = null;
+			if (!readOnlyNativeContextActive) return;
+			readOnlyNativeContextActive = false;
+			setNativeContextMenuDisabled(false);
+		};
+		const scheduleReadOnlyNativeContextRelease = () => {
+			if (!readOnlyNativeContextActive) return;
+			clearTimeout(readOnlyNativeContextResetTimer);
+			readOnlyNativeContextResetTimer = setTimeout(
+				releaseReadOnlyNativeContext,
+				800,
+			);
+		};
+		function handleContentPointerDown() {
+			if (!isReadOnlyEditor()) return;
+			clearTimeout(readOnlyNativeContextResetTimer);
+			readOnlyNativeContextResetTimer = null;
+			readOnlyNativeContextActive = true;
+			setNativeContextMenuDisabled(true);
+		}
+		function handleDocumentPointerDown(event) {
+			if (!readOnlyNativeContextActive) return;
+			if (event.target instanceof Node && editor.dom.contains(event.target)) {
+				return;
+			}
+			releaseReadOnlyNativeContext();
+		}
 		const isFocused =
 			contentDOM === document.activeElement ||
 			contentDOM.contains(document.activeElement);
@@ -4237,6 +4579,16 @@ async function EditorManager($header, $body) {
 
 		function handleContentFocus(_event) {
 			setActivePane(pane);
+			if (isReadOnlyEditor()) {
+				if (!readOnlyNativeContextActive) {
+					setNativeContextMenuDisabled(false);
+				}
+				clearPendingKeyboardHideBlur();
+				clearFileFocusState();
+				blurEditorIfReadOnly(editor, true);
+				touchSelectionController?.onStateChanged();
+				return;
+			}
 			setNativeContextMenuDisabled(true);
 			const activeFile = pane.activeFile;
 			if (activeFile) {
@@ -4246,17 +4598,18 @@ async function EditorManager($header, $body) {
 		}
 
 		async function handleContentBlur(_event) {
-			setNativeContextMenuDisabled(false);
+			if (!readOnlyNativeContextActive) {
+				setNativeContextMenuDisabled(false);
+			}
 			touchSelectionController?.setMenu(false);
+			if (isReadOnlyEditor()) {
+				clearPendingKeyboardHideBlur();
+				clearFileFocusState();
+				return;
+			}
 			const { hardKeyboardHidden, keyboardHeight } =
 				await getSystemConfiguration();
-			const blur = () => {
-				const activeFile = pane.activeFile;
-				if (activeFile) {
-					activeFile.focused = false;
-					activeFile.focusedBefore = false;
-				}
-			};
+			const blur = clearFileFocusState;
 			if (
 				hardKeyboardHidden === HARDKEYBOARDHIDDEN_NO &&
 				keyboardHeight < 100
@@ -4273,9 +4626,7 @@ async function EditorManager($header, $body) {
 				}
 				blur();
 			};
-			if (pendingKeyboardHideBlur) {
-				keyboardHandler.off("keyboardHide", pendingKeyboardHideBlur);
-			}
+			clearPendingKeyboardHideBlur();
 			pendingKeyboardHideBlur = onKeyboardHide;
 			keyboardHandler.on("keyboardHide", onKeyboardHide);
 		}
@@ -4289,6 +4640,18 @@ async function EditorManager($header, $body) {
 		contentDOM.addEventListener("focus", handleContentFocus);
 		contentDOM.addEventListener("blur", handleContentBlur);
 		contentDOM.addEventListener("keydown", handleContentKeydown);
+		contentDOM.addEventListener("pointerdown", handleContentPointerDown, true);
+		document.addEventListener("pointerdown", handleDocumentPointerDown, true);
+		document.addEventListener(
+			"pointerup",
+			scheduleReadOnlyNativeContextRelease,
+			true,
+		);
+		document.addEventListener(
+			"pointercancel",
+			scheduleReadOnlyNativeContextRelease,
+			true,
+		);
 
 		pane.cleanupEditorListeners = () => {
 			scroller?.removeEventListener("scroll", handleEditorScroll);
@@ -4298,6 +4661,27 @@ async function EditorManager($header, $body) {
 			contentDOM.removeEventListener("focus", handleContentFocus);
 			contentDOM.removeEventListener("blur", handleContentBlur);
 			contentDOM.removeEventListener("keydown", handleContentKeydown);
+			contentDOM.removeEventListener(
+				"pointerdown",
+				handleContentPointerDown,
+				true,
+			);
+			document.removeEventListener(
+				"pointerdown",
+				handleDocumentPointerDown,
+				true,
+			);
+			document.removeEventListener(
+				"pointerup",
+				scheduleReadOnlyNativeContextRelease,
+				true,
+			);
+			document.removeEventListener(
+				"pointercancel",
+				scheduleReadOnlyNativeContextRelease,
+				true,
+			);
+			releaseReadOnlyNativeContext();
 			clearTimeout(scrollTimeout);
 			if (scrollSyncRaf) {
 				cancelAnimationFrame(scrollSyncRaf);
@@ -4533,8 +4917,15 @@ async function EditorManager($header, $body) {
 		};
 	}
 
-	function updateScrollbarsFromMetrics(metrics) {
+	function updateScrollbarsFromMetrics(metrics, sourcePane) {
 		if (!metrics) return;
+		if (sourcePane !== activePane || sourcePane.activeFile?.type !== "editor") {
+			if (sourcePane === activePane) {
+				$hScrollbar.hideImmediately();
+				$vScrollbar.hideImmediately();
+			}
+			return;
+		}
 
 		const maxScrollTop = Math.max(
 			metrics.scrollHeight - metrics.clientHeight,
@@ -4738,7 +5129,7 @@ async function EditorManager($header, $body) {
 			return;
 		}
 
-		$body.append(sideButtonContainer);
+		getActivePane()?.content.append(sideButtonContainer);
 	}
 
 	/**
@@ -4778,11 +5169,7 @@ async function EditorManager($header, $body) {
 				file.tab?.classList.add("active");
 				updateHeaderForFile(file);
 				if (file.type === "editor") {
-					if (!file.loaded && !file.loading) {
-						showLoadingEditor(file);
-					} else {
-						applyFileToPaneEditor(file, pane);
-					}
+					applyFileToPaneEditor(file, pane);
 					pane.editorContainer.style.display = "block";
 
 					$hScrollbar.hideImmediately();
@@ -4811,7 +5198,7 @@ async function EditorManager($header, $body) {
 
 		// Persist the previous editor's state before switching away
 		const prev = paneActiveFile;
-		if (prev?.type === "editor") {
+		if (prev?.type === "editor" && prev.loaded && !prev.loading) {
 			prev.session = getRawEditorState(pane.editor.state);
 			prev.lastScrollTop = pane.editor.scrollDOM?.scrollTop || 0;
 			prev.lastScrollLeft = pane.editor.scrollDOM?.scrollLeft || 0;
@@ -4836,12 +5223,7 @@ async function EditorManager($header, $body) {
 
 		if (file.type === "editor") {
 			pane.touchSelectionController?.setEnabled(true);
-			if (!file.loaded && !file.loading) {
-				showLoadingEditor(file);
-			} else {
-				// Apply active file content and language to CodeMirror
-				applyFileToEditor(file);
-			}
+			applyFileToEditor(file);
 			pane.editorContainer.style.display = "block";
 
 			$hScrollbar.hideImmediately();
@@ -4854,6 +5236,8 @@ async function EditorManager($header, $body) {
 		} else {
 			pane.touchSelectionController?.setEnabled(false);
 			pane.editorContainer.style.display = "none";
+			$hScrollbar.hideImmediately();
+			$vScrollbar.hideImmediately();
 			if (file.content) {
 				file.content.style.display = "block";
 				if (file.content.parentElement !== pane.content) {
@@ -4965,10 +5349,6 @@ async function EditorManager($header, $body) {
 		const { openFileListPos } = appSettings.value;
 		if (isPaneTabLayout()) {
 			$openFileList = $globalOpenFileList;
-			$paneRoot.dataset.tabsPosition =
-				openFileListPos === appSettings.OPEN_FILE_LIST_POS_BOTTOM
-					? "bottom"
-					: "top";
 			root.classList.remove("top-bar");
 			syncOpenFileList();
 		} else {
@@ -4988,7 +5368,6 @@ async function EditorManager($header, $body) {
 			syncOpenFileList();
 		}
 
-		root.setAttribute("open-file-list-pos", openFileListPos);
 		manager.emit("int-open-file-list", openFileListPos);
 	}
 
@@ -5057,12 +5436,7 @@ async function EditorManager($header, $body) {
 
 			const total = view.scrollDOM.scrollWidth || 0;
 			const viewport = view.scrollDOM.clientWidth || 0;
-			let width = Math.max(total - viewport, 0);
-			if (!appSettings.value.textWrap) {
-				const { leftMargin = 0 } = appSettings.value;
-				width += leftMargin || 0;
-			}
-			return width;
+			return Math.max(total - viewport, 0);
 		} catch (_) {
 			return 0;
 		}

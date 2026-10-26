@@ -1,9 +1,9 @@
 import "./style.scss";
+import { focusEditorIfEditable } from "cm/editorReadOnly";
 import { getLspDiagnostics } from "cm/lsp/diagnostics";
 import Page from "components/page";
 import actionStack from "lib/actionStack";
 import EditorFile from "lib/editorFile";
-import { hideAd } from "lib/startAd";
 import helpers from "utils/helpers";
 
 export default function Problems() {
@@ -54,7 +54,6 @@ export default function Problems() {
 	helpers.showAd();
 
 	$page.onhide = function () {
-		hideAd();
 		actionStack.remove("problems");
 	};
 
@@ -84,7 +83,7 @@ export default function Problems() {
 			$page.hide();
 
 			setTimeout(() => {
-				editorManager.editor.focus();
+				focusEditorIfEditable(editorManager.editor);
 			}, 100);
 		}
 	}

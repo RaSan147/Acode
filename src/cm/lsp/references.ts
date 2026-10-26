@@ -1,11 +1,11 @@
 import fsOperation from "fileSystem";
 import { LSPPlugin } from "@codemirror/lsp-client";
 import type { EditorView } from "@codemirror/view";
+import { getDocText } from "cm/editorUtils";
 import {
 	openReferencesTab,
 	showReferencesPanel,
 } from "components/referencesPanel";
-import { getDocText } from "cm/editorUtils";
 import settings from "lib/settings";
 
 interface Position {
@@ -33,7 +33,10 @@ interface ReferenceParams {
 	context: { includeDeclaration: boolean };
 }
 
-async function fetchLineText(uri: string, line: number): Promise<string> {
+export async function fetchLineText(
+	uri: string,
+	line: number,
+): Promise<string> {
 	try {
 		interface EditorManagerLike {
 			getFile?: (uri: string, type: string) => EditorFileLike | null;
@@ -89,7 +92,7 @@ async function fetchLineText(uri: string, line: number): Promise<string> {
 	return "";
 }
 
-function getWordAtCursor(view: EditorView): string {
+export function getWordAtCursor(view: EditorView): string {
 	const { state } = view;
 	const pos = state.selection.main.head;
 	const word = state.wordAt(pos);
@@ -102,15 +105,10 @@ function getWordAtCursor(view: EditorView): string {
 async function fetchReferences(
 	view: EditorView,
 ): Promise<{ symbolName: string; references: ReferenceWithContext[] } | null> {
-	const plugin = LSPPlugin.get(view);
-	if (!plugin) {
-		return null;
-	}
-
-	const client = plugin.client;
-	const capabilities = client.serverCapabilities;
-
-	if (!capabilities?.referencesProvider) {
+	const plugins = LSPPlugin.getAll(view, "references").filter(
+		(plugin) => !!plugin.client.serverCapabilities?.referencesProvider,
+	);
+	if (!plugins.length) {
 		const toast = (globalThis as Record<string, unknown>).toast as
 			| ((msg: string) => void)
 			| undefined;
@@ -123,24 +121,37 @@ async function fetchReferences(
 	const line = state.doc.lineAt(pos);
 	const lineNumber = line.number - 1;
 	const character = pos - line.from;
-	const uri = plugin.uri;
-
 	const symbolName = getWordAtCursor(view);
-
-	client.sync();
-
-	const params: ReferenceParams = {
-		textDocument: { uri },
-		position: { line: lineNumber, character },
-		context: { includeDeclaration: true },
-	};
-
-	const locations = await client.request<ReferenceParams, Location[] | null>(
-		"textDocument/references",
-		params,
+	const settled = await Promise.allSettled(
+		plugins.map(async (plugin) => {
+			plugin.client.sync();
+			return (
+				(await plugin.client.request<ReferenceParams, Location[] | null>(
+					"textDocument/references",
+					{
+						textDocument: { uri: plugin.uri },
+						position: { line: lineNumber, character },
+						context: { includeDeclaration: true },
+					},
+				)) ?? []
+			);
+		}),
 	);
-
-	if (!locations || locations.length === 0) {
+	const locations: Location[] = [];
+	const seen = new Set<string>();
+	for (const result of settled) {
+		if (result.status === "rejected") {
+			console.warn("[LSP:References] Provider failed", result.reason);
+			continue;
+		}
+		for (const location of result.value) {
+			const key = `${location.uri}:${location.range.start.line}:${location.range.start.character}:${location.range.end.line}:${location.range.end.character}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			locations.push(location);
+		}
+	}
+	if (!locations.length) {
 		return { symbolName, references: [] };
 	}
 

@@ -1,5 +1,17 @@
 export const modifierKeys = ["shift", "alt", "ctrl", "meta"];
 
+/**
+ * CodeMirror can safely receive Shift-only text because replacing the current
+ * selection is intentional. Command modifiers must capture text outside the
+ * contenteditable so Android keyboards cannot mutate the document first.
+ */
+export function shouldCaptureModifierInput(state, isCodeMirrorTarget) {
+	const hasActiveModifier = modifierKeys.some((key) => Boolean(state[key]));
+	if (!hasActiveModifier) return false;
+	if (!isCodeMirrorTarget) return true;
+	return Boolean(state.ctrl || state.alt || state.meta);
+}
+
 export function clearModifierState(state, events = {}) {
 	let changed = false;
 
@@ -13,12 +25,13 @@ export function clearModifierState(state, events = {}) {
 }
 
 export function clearQuickToolsButtonFeedback(containers = []) {
-	const visited = new Set();
+	const visitedContainers = new Set();
+	const visitedButtons = new Set();
 	let cleared = 0;
 
 	for (const container of containers) {
-		if (!container || visited.has(container)) continue;
-		visited.add(container);
+		if (!container || visitedContainers.has(container)) continue;
+		visitedContainers.add(container);
 
 		const buttons = [
 			...(container.matches?.(".active, .click, [data-timeout]")
@@ -29,8 +42,8 @@ export function clearQuickToolsButtonFeedback(containers = []) {
 		];
 
 		for (const button of buttons) {
-			if (!button || visited.has(button)) continue;
-			visited.add(button);
+			if (!button || visitedButtons.has(button)) continue;
+			visitedButtons.add(button);
 			if (button.dataset?.timeout) {
 				clearTimeout(Number(button.dataset.timeout));
 				delete button.dataset.timeout;

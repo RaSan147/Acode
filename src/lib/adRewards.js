@@ -1,12 +1,17 @@
 import toast from "components/toast";
-import auth from "./auth";
+import {
+	createRewardStateLifecycle,
+	isRewardPassActive,
+} from "./adRewardBannerPolicy.mjs";
 import config from "./config";
+import showRewardedAd, {
+	isRewardedAdSupported,
+	isWatchingRewardedAd,
+} from "./rewardedAd";
 import secureAdRewardState from "./secureAdRewardState";
-import { adUnitIdRewarded, bannerAd } from "./startAd";
+import { setBannerSuppressed } from "./startAd";
 
 const ONE_HOUR = 60 * 60 * 1000;
-const MAX_TIMEOUT = 2_147_483_647;
-const REWARDED_RESULT_TIMEOUT_MS = 90 * 1000;
 
 const OFFERS = [
 	{
@@ -30,7 +35,6 @@ const OFFERS = [
 ];
 
 let state = getDefaultState();
-let expiryTimer = null;
 let activeWatchPromise = null;
 const listeners = new Set();
 
@@ -86,13 +90,6 @@ function emitChange() {
 	});
 }
 
-function hideActiveBanner() {
-	if (bannerAd?.active) {
-		bannerAd.active = false;
-		bannerAd.hide?.();
-	}
-}
-
 function notify(title, message, type = "info") {
 	toast(message, 4000);
 	window.acode?.pushNotification?.(title, message, {
@@ -127,52 +124,27 @@ function normalizeStatus(status) {
 	};
 }
 
-function clearExpiryTimer() {
-	if (expiryTimer) {
-		clearTimeout(expiryTimer);
-		expiryTimer = null;
-	}
-}
-
-async function refreshState({ notifyExpiry = false } = {}) {
-	try {
-		const nextState = normalizeStatus(await secureAdRewardState.getStatus());
+const rewardLifecycle = createRewardStateLifecycle({
+	loadStatus: () => secureAdRewardState.getStatus(),
+	normalizeStatus,
+	getCurrentState: () => state,
+	setCurrentState: (nextState) => {
 		state = nextState;
-		emitChange();
-		scheduleExpiryCheck();
-
-		if (notifyExpiry && nextState.hasPendingExpiryNotice) {
-			notify(
-				"Ad-free pass ended",
-				"Your rewarded ad-free time has expired. You can watch another rewarded ad anytime.",
-				"warning",
-			);
-		}
-
-		return nextState;
-	} catch (error) {
-		console.warn("Failed to refresh rewarded ad state.", error);
-		return state;
-	}
-}
-
-function scheduleExpiryCheck() {
-	clearExpiryTimer();
-	if (!state.adFreeUntil) return;
-
-	const remainingMs = state.adFreeUntil - Date.now();
-	if (remainingMs <= 0) {
-		void refreshState({ notifyExpiry: true });
-		return;
-	}
-
-	expiryTimer = setTimeout(
-		() => {
-			void refreshState({ notifyExpiry: true });
-		},
-		Math.min(remainingMs, MAX_TIMEOUT),
-	);
-}
+	},
+	setBannerSuppressed,
+	emitChange,
+	onRefreshError: (error) =>
+		console.warn("Failed to refresh rewarded ad state.", error),
+	onListenerError: (error) =>
+		console.error("Reward lifecycle listener failed.", error),
+	onExpiryNotice: () => {
+		notify(
+			"Ad-free pass ended",
+			"Your rewarded ad-free time has expired. You can watch another rewarded ad anytime.",
+			"warning",
+		);
+	},
+});
 
 async function getRewardIdentity() {
 	try {
@@ -183,90 +155,31 @@ async function getRewardIdentity() {
 	}
 }
 
-async function createRewardedAd(offer, step, sessionId) {
-	if (!admob?.RewardedAd) {
-		throw new Error("Rewarded ads are not available in this build.");
-	}
-
-	const userId = await getRewardIdentity();
-	const customData = [
-		`session=${sessionId}`,
-		`offer=${offer.id}`,
-		`step=${step}`,
-		`ads=${offer.adsRequired}`,
-	].join("&");
-
-	return new admob.RewardedAd({
-		adUnitId: adUnitIdRewarded,
+async function showRewardedStep(offer, step, sessionId) {
+	const earned = await showRewardedAd({
 		serverSideVerification: {
-			userId,
-			customData,
+			userId: await getRewardIdentity(),
+			customData: [
+				`session=${sessionId}`,
+				`offer=${offer.id}`,
+				`step=${step}`,
+				`ads=${offer.adsRequired}`,
+			].join("&"),
 		},
 	});
-}
-
-function waitForRewardedResult(ad) {
-	return new Promise((resolve, reject) => {
-		let earned = false;
-		let settled = false;
-		const timeoutId = setTimeout(() => {
-			fail(
-				new Error("Rewarded ad timed out before completion. Please try again."),
-			);
-		}, REWARDED_RESULT_TIMEOUT_MS);
-
-		const finish = (result) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timeoutId);
-			resolve(result);
-		};
-
-		const fail = (error) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timeoutId);
-			reject(
-				error instanceof Error
-					? error
-					: new Error(error?.message || "Rewarded ad failed."),
-			);
-		};
-
-		ad.on("reward", () => {
-			earned = true;
-		});
-
-		ad.on("dismiss", () => {
-			finish({ earned });
-		});
-
-		ad.on("showfail", fail);
-		ad.on("loadfail", fail);
-	});
-}
-
-async function showRewardedStep(offer, step, sessionId) {
-	const rewardedAd = await createRewardedAd(offer, step, sessionId);
-	const resultPromise = waitForRewardedResult(rewardedAd);
-	await rewardedAd.load();
-	await rewardedAd.show();
-	const result = await resultPromise;
-	if (!result.earned) {
-		throw new Error("Reward not earned. The ad was closed before completion.");
-	}
+	if (!earned) throw new Error(strings["rewarded ad incomplete"]);
 }
 
 export default {
 	async init() {
-		await refreshState({ notifyExpiry: false });
+		await rewardLifecycle.initialize();
 	},
 	onChange(listener) {
 		listeners.add(listener);
 		return () => listeners.delete(listener);
 	},
 	async handleResume() {
-		await refreshState({ notifyExpiry: true });
+		await rewardLifecycle.resume();
 	},
 	getState() {
 		return {
@@ -309,19 +222,19 @@ export default {
 		return expiryDate.toLocaleString();
 	},
 	isAdFreeActive() {
-		return Boolean(state.isActive && state.adFreeUntil > Date.now());
+		return isRewardPassActive(state);
 	},
 	canShowAds() {
 		return Boolean(!config.HAS_PRO && !this.isAdFreeActive());
 	},
 	isRewardedSupported() {
-		return Boolean(!config.HAS_PRO && admob?.RewardedAd && adUnitIdRewarded);
+		return isRewardedAdSupported();
 	},
 	getRewardedUnavailableReason() {
 		if (config.HAS_PRO) {
 			return "Ads are already disabled on this build.";
 		}
-		if (!admob?.RewardedAd) {
+		if (!isRewardedAdSupported()) {
 			return "Rewarded ads are unavailable on this device.";
 		}
 		return "";
@@ -333,7 +246,7 @@ export default {
 		};
 	},
 	isWatchingReward() {
-		return Boolean(activeWatchPromise);
+		return Boolean(activeWatchPromise) || isWatchingRewardedAd();
 	},
 	async watchOffer(offerId, { onStep } = {}) {
 		if (activeWatchPromise) {
@@ -348,18 +261,18 @@ export default {
 			throw new Error(this.getRewardedUnavailableReason());
 		}
 
-		await refreshState({ notifyExpiry: false });
-		const redemptionStatus = this.canRedeemNow();
-		if (!redemptionStatus.ok) {
-			throw new Error(redemptionStatus.reason);
-		}
-
 		const sessionId =
 			typeof crypto?.randomUUID === "function"
 				? crypto.randomUUID()
 				: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 		activeWatchPromise = (async () => {
+			await rewardLifecycle.refresh({ notifyExpiry: false });
+			const redemptionStatus = this.canRedeemNow();
+			if (!redemptionStatus.ok) {
+				throw new Error(redemptionStatus.reason);
+			}
+
 			for (let step = 1; step <= offer.adsRequired; step += 1) {
 				onStep?.({
 					step,
@@ -376,18 +289,13 @@ export default {
 				}
 			}
 
-			const redeemedState = normalizeStatus(
+			const redeemedState = rewardLifecycle.applyStatus(
 				await secureAdRewardState.redeem(offer.id),
 			);
 			const grantedDurationMs =
 				Number(redeemedState.appliedDurationMs) ||
 				Number(redeemedState.grantedDurationMs) ||
 				0;
-
-			state = redeemedState;
-			emitChange();
-			hideActiveBanner();
-			scheduleExpiryCheck();
 
 			notify(
 				"Ad-free pass started",

@@ -1,4 +1,4 @@
-import type { LSPClientExtension } from "@codemirror/lsp-client";
+import type { LSPClient, LSPClientExtension } from "@codemirror/lsp-client";
 import { LSPPlugin } from "@codemirror/lsp-client";
 import type { Extension, Range } from "@codemirror/state";
 import { MapMode, StateEffect, StateField } from "@codemirror/state";
@@ -18,6 +18,7 @@ import type {
 	TextEdit,
 } from "vscode-languageserver-types";
 import {
+	type ColorChipPayload,
 	clamp01,
 	colorChipDecoration,
 	colorChipTheme,
@@ -30,8 +31,8 @@ import {
 	lspColorToCss,
 	lspColorToHex,
 	openColorPicker,
-	type ColorChipPayload,
 } from "../colorChip";
+import { safeLspPositionToOffset } from "./positionUtils";
 import type { LSPPluginAPI } from "./types";
 
 export interface DocumentColorsConfig {
@@ -47,6 +48,7 @@ export interface LspDocumentColor {
 	to: number;
 	color: Color;
 	css: string;
+	client: LSPClient;
 }
 
 interface DocumentColorParams {
@@ -146,6 +148,7 @@ function toChipPayload(c: LspDocumentColor): ColorChipPayload {
 		css: c.css,
 		pickerSeed: lspColorToHex(c.color),
 		source: "lsp",
+		lspClient: c.client,
 	};
 }
 
@@ -173,8 +176,8 @@ function mapLspRange(
 	let from: number;
 	let to: number;
 	try {
-		const fromBase = lsp.fromPosition(range.start, lsp.syncedDoc);
-		const toBase = lsp.fromPosition(range.end, lsp.syncedDoc);
+		const fromBase = safeLspPositionToOffset(lsp.syncedDoc, range.start);
+		const toBase = safeLspPositionToOffset(lsp.syncedDoc, range.end);
 		const fromMapped = lsp.unsyncedChanges.mapPos(
 			fromBase,
 			1,
@@ -289,8 +292,12 @@ function createPlugin(config: DocumentColorsConfig) {
 					return;
 				}
 
-				const lsp = LSPPlugin.get(this.view) as LSPPluginAPI | null;
-				if (!lsp?.client.connected) {
+				const bindings = LSPPlugin.getAll(
+					this.view,
+					"documentColor",
+				) as readonly LSPPluginAPI[];
+				const connected = bindings.filter((lsp) => lsp.client.connected);
+				if (!connected.length) {
 					if (this.hasProvider || this.providerKnown) {
 						this.hasProvider = false;
 						this.providerKnown = false;
@@ -305,12 +312,7 @@ function createPlugin(config: DocumentColorsConfig) {
 				}
 				this.connectRetries = 0;
 
-				const caps = lsp.client.serverCapabilities as
-					| { colorProvider?: boolean | object }
-					| null
-					| undefined;
-
-				if (!caps) {
+				if (connected.some((lsp) => !lsp.client.serverCapabilities)) {
 					if (this.capRetries < MAX_CAP_RETRIES) {
 						this.capRetries++;
 						this.schedule(false);
@@ -319,9 +321,11 @@ function createPlugin(config: DocumentColorsConfig) {
 				}
 				this.capRetries = 0;
 
-				const provider = !!caps.colorProvider;
+				const providers = connected.filter(
+					(lsp) => !!lsp.client.serverCapabilities?.colorProvider,
+				);
 				this.providerKnown = true;
-				if (!provider) {
+				if (!providers.length) {
 					if (this.hasProvider) {
 						this.hasProvider = false;
 						this.clearColors();
@@ -330,28 +334,35 @@ function createPlugin(config: DocumentColorsConfig) {
 				}
 				this.hasProvider = true;
 
-				lsp.client.sync();
 				const id = ++this.reqId;
-
-				try {
-					const result = await lsp.client.request<
-						DocumentColorParams,
-						ColorInformation[] | null
-					>("textDocument/documentColor", {
-						textDocument: { uri: lsp.uri },
-					});
-
-					if (id !== this.reqId) return;
-
-					const stored = this.process(
-						lsp,
-						result ?? [],
-						this.view.state.doc.length,
-					);
-					this.view.dispatch({ effects: setColors.of(stored) });
-				} catch {
-					/* keep previous chips */
+				const settled = await Promise.allSettled(
+					providers.map(async (lsp) => {
+						lsp.client.sync();
+						const result = await lsp.client.request<
+							DocumentColorParams,
+							ColorInformation[] | null
+						>("textDocument/documentColor", {
+							textDocument: { uri: lsp.uri },
+						});
+						return this.process(lsp, result ?? [], this.view.state.doc.length);
+					}),
+				);
+				if (id !== this.reqId) return;
+				const stored: LspDocumentColor[] = [];
+				const seen = new Set<string>();
+				for (const result of settled) {
+					if (result.status !== "fulfilled") continue;
+					for (const color of result.value) {
+						const key = `${color.from}:${color.to}:${color.css}`;
+						if (seen.has(key)) continue;
+						seen.add(key);
+						stored.push(color);
+						if (stored.length >= maxColors) break;
+					}
+					if (stored.length >= maxColors) break;
 				}
+				stored.sort((a, b) => a.from - b.from || a.to - b.to);
+				this.view.dispatch({ effects: setColors.of(stored) });
 			}
 
 			process(
@@ -377,6 +388,7 @@ function createPlugin(config: DocumentColorsConfig) {
 						to: mapped.to,
 						color,
 						css: lspColorToCss(color),
+						client: lsp.client,
 					});
 
 					if (out.length >= maxColors) break;
@@ -422,7 +434,11 @@ async function handleColorPick(
 	view: EditorView,
 	payload: ColorChipPayload,
 ): Promise<void> {
-	const lsp = LSPPlugin.get(view) as LSPPluginAPI | null;
+	const lsp = (
+		payload.lspClient
+			? LSPPlugin.get(view, payload.lspClient)
+			: LSPPlugin.getForFeature(view, "documentColor")
+	) as LSPPluginAPI | null;
 	if (!lsp?.client.connected) return;
 
 	const doc = view.state.doc;
@@ -436,7 +452,11 @@ async function handleColorPick(
 	const picked = await openColorPicker(seed);
 	if (!picked) return;
 
-	const lsp2 = LSPPlugin.get(view) as LSPPluginAPI | null;
+	const lsp2 = (
+		payload.lspClient
+			? LSPPlugin.get(view, payload.lspClient)
+			: LSPPlugin.getForFeature(view, "documentColor")
+	) as LSPPluginAPI | null;
 	if (!lsp2?.client.connected) return;
 
 	const live = findLiveColor(view, payload, currentText);
@@ -513,17 +533,27 @@ export function documentColorsClientExtension(): LSPClientExtension {
 		clientCapabilities: {
 			textDocument: {
 				colorProvider: {
-					dynamicRegistration: true,
+					dynamicRegistration: false,
 				},
 			},
 		},
 	};
 }
 
+let defaultDocumentColorsEditorExtension: Extension | null = null;
+
 export function documentColorsEditorExtension(
 	config: DocumentColorsConfig = {},
 ): Extension {
 	if (config.enabled === false) return [];
+	if (!Object.keys(config).length) {
+		defaultDocumentColorsEditorExtension ??= [
+			lspDocumentColorsField,
+			createPlugin({}),
+			colorChipTheme,
+		];
+		return defaultDocumentColorsEditorExtension;
+	}
 	return [lspDocumentColorsField, createPlugin(config), colorChipTheme];
 }
 

@@ -1,3 +1,4 @@
+import type { Language } from "@codemirror/language";
 import type {
 	LSPClient,
 	LSPClientConfig,
@@ -6,7 +7,6 @@ import type {
 	Workspace,
 	WorkspaceFile,
 } from "@codemirror/lsp-client";
-import type { Language } from "@codemirror/language";
 import type { ChangeSet, Extension, MapMode, Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 
@@ -232,6 +232,7 @@ export interface LauncherConfig {
 	command?: string;
 	args?: string[];
 	startCommand?: string | string[];
+	logOutput?: "all" | "warnings-and-errors";
 	checkCommand?: string;
 	versionCommand?: string;
 	updateCommand?: string;
@@ -281,9 +282,12 @@ export interface LspServerManifest {
 	id?: string;
 	label?: string;
 	enabled?: boolean;
+	/** Higher-priority servers own single-provider features such as formatting. */
+	priority?: number;
 	languages?: string[];
 	transport?: TransportDescriptor;
 	initializationOptions?: Record<string, unknown>;
+	workspaceConfiguration?: Record<string, unknown>;
 	clientConfig?: Record<string, unknown> | AcodeClientConfig;
 	startupTimeout?: number;
 	capabilityOverrides?: Record<string, unknown>;
@@ -336,9 +340,11 @@ export interface LspServerDefinition {
 	id: string;
 	label: string;
 	enabled: boolean;
+	priority: number;
 	languages: string[];
 	transport: TransportDescriptor;
 	initializationOptions?: Record<string, unknown>;
+	workspaceConfiguration?: Record<string, unknown>;
 	clientConfig?: AcodeClientConfig;
 	startupTimeout?: number;
 	capabilityOverrides?: Record<string, unknown>;
@@ -405,6 +411,8 @@ export interface ClientManagerOptions {
 	displayFile?: (uri: string) => Promise<EditorView | null>;
 	openFile?: (uri: string) => Promise<EditorView | null>;
 	resolveLanguageId?: (uri: string) => string | null;
+	/** Delay before an unreferenced client is reported as idle. */
+	clientIdleGracePeriodMs?: number;
 	onClientIdle?: (info: ClientIdleInfo) => void;
 	allowNonTerminalWorkspace?: boolean;
 }
@@ -413,6 +421,8 @@ export interface ClientIdleInfo {
 	server: LspServerDefinition;
 	client: LSPClient;
 	rootUri: string | null;
+	/** Disposes only this idle client instance (not every client for the server id). */
+	dispose: () => Promise<void>;
 }
 
 export interface ClientState {
@@ -511,6 +521,8 @@ export interface WorkspaceOptions {
 	displayFile?: (uri: string) => Promise<EditorView | null>;
 	openFile?: (uri: string) => Promise<EditorView | null>;
 	resolveLanguageId?: (uri: string) => string | null;
+	/** Folders already advertised in `initialize`; do not re-notify. */
+	initialFolders?: string[];
 }
 
 // ============================================================================
@@ -544,6 +556,29 @@ export interface PublishDiagnosticsParams {
 	version?: number;
 	diagnostics: RawDiagnostic[];
 }
+
+export interface DocumentDiagnosticParams {
+	textDocument: {
+		uri: string;
+	};
+	identifier?: string;
+	previousResultId?: string;
+}
+
+export interface FullDocumentDiagnosticReport {
+	kind: "full";
+	resultId?: string;
+	items: RawDiagnostic[];
+}
+
+export interface UnchangedDocumentDiagnosticReport {
+	kind: "unchanged";
+	resultId: string;
+}
+
+export type DocumentDiagnosticReport =
+	| FullDocumentDiagnosticReport
+	| UnchangedDocumentDiagnosticReport;
 
 export interface RawDiagnostic {
 	range: Range;
@@ -596,17 +631,13 @@ export interface LSPPluginAPI {
 	client: LSPClient & { sync: () => void; connected?: boolean };
 	/** Convert a document offset to an LSP Position */
 	toPosition: (offset: number) => { line: number; character: number };
-	/** Convert an LSP Position to a document offset */
-	fromPosition: (
-		pos: { line: number; character: number },
-		doc?: unknown,
-	) => number;
 	/** The currently synced document state */
-	syncedDoc: { length: number };
+	syncedDoc: Text;
 	/** Pending changes that haven't been synced yet */
 	unsyncedChanges: {
 		mapPos: (pos: number, assoc?: number, mode?: MapMode) => number | null;
 		empty: boolean;
+		newLength: number;
 	};
 	/** Clear pending changes */
 	clear: () => void;

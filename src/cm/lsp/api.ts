@@ -1,5 +1,12 @@
 import { defineBundle, defineServer, installers } from "./providerUtils";
 import {
+	getRuntimeProvider,
+	listRuntimeProviders,
+	registerRuntimeProvider,
+	selectRuntimeProvider,
+	unregisterRuntimeProvider,
+} from "./runtimeProviders";
+import {
 	getServerBundle,
 	listServerBundles,
 	registerServerBundle,
@@ -16,13 +23,6 @@ import {
 	unregisterServer,
 	updateServer,
 } from "./serverRegistry";
-import {
-	getRuntimeProvider,
-	listRuntimeProviders,
-	registerRuntimeProvider,
-	selectRuntimeProvider,
-	unregisterRuntimeProvider,
-} from "./runtimeProviders";
 import "./runtimes/registerBuiltins";
 import type {
 	LspRuntimeContext,
@@ -31,7 +31,15 @@ import type {
 	LspServerDefinition,
 	LspServerManifest,
 } from "./types";
+import {
+	createWorkerTransport,
+	type LspWorkerTransportOptions,
+} from "./workerTransport";
 
+export type {
+	LspWorkerHostHandler,
+	LspWorkerTransportOptions,
+} from "./workerTransport";
 export { defineBundle, defineServer, installers };
 
 export type LspRegistrationEntry = LspServerManifest | LspServerBundle;
@@ -117,6 +125,12 @@ export const runtimes = {
 export const registerRuntime = runtimes.register;
 export const unregisterRuntime = runtimes.unregister;
 
+export const workers = {
+	createTransport(options: LspWorkerTransportOptions) {
+		return createWorkerTransport(options);
+	},
+};
+
 const lspApi = {
 	defineServer,
 	defineBundle,
@@ -126,6 +140,7 @@ const lspApi = {
 	servers,
 	bundles,
 	runtimes,
+	workers,
 	registerRuntimeProvider: registerRuntime,
 	unregisterRuntimeProvider: unregisterRuntime,
 };

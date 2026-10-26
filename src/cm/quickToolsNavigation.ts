@@ -31,10 +31,11 @@ import {
 	selectPageUp,
 } from "@codemirror/commands";
 import {
-	type Command,
 	type EditorView as CodeMirrorEditorView,
+	type Command,
 	runScopeHandlers,
 } from "@codemirror/view";
+import { focusEditorIfEditable } from "cm/editorReadOnly";
 import createKeyboardEvent from "utils/keyboardEvent";
 
 interface QuickToolKeyModifiers {
@@ -146,7 +147,7 @@ export function runQuickToolKey(
 
 	const event = createQuickToolKeyEvent(keyCode, modifiers);
 	if (runScopeHandlers(view, event, "editor")) {
-		view.focus();
+		focusEditorIfEditable(view);
 		return true;
 	}
 
@@ -154,7 +155,7 @@ export function runQuickToolKey(
 	if (!command) return false;
 	const handled = command(view);
 	if (handled !== false) {
-		view.focus();
+		focusEditorIfEditable(view);
 		return true;
 	}
 

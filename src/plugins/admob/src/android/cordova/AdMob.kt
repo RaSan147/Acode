@@ -28,21 +28,32 @@ import org.json.JSONObject
 
 private const val TAG = "AdMobPlus"
 
+internal fun shouldDispatchAdShow(
+    isLoaded: Boolean,
+    canShowWhileLoading: Boolean,
+): Boolean = isLoaded || canShowWhileLoading
+
 class AdMob : CordovaPlugin() {
     lateinit var context: CallbackContext
     private var readyCallbackContext: CallbackContext? = null
     private var sdkReady = false
     private val eventQueue: ArrayList<PluginResult> = arrayListOf()
+    private val privacy: Privacy by lazy { Privacy(this) }
 
     private val actions = mapOf(
         Actions.READY to ::executeReady,
         Actions.START to ::executeStart,
         Actions.CONFIGURE to ::executeConfigure,
         Actions.AD_CREATE to ::executeAdCreate,
+        Actions.AD_DESTROY to ::executeAdDestroy,
         Actions.AD_IS_LOADED to ::executeAdIsLoaded,
         Actions.AD_LOAD to ::executeAdLoad,
         Actions.AD_SHOW to ::executeAdShow,
         Actions.AD_HIDE to ::executeAdHide,
+        Actions.PRIVACY_GATHER_CONSENT to privacy::gatherConsent,
+        Actions.PRIVACY_GET_STATE to privacy::getState,
+        Actions.PRIVACY_RESET_FOR_TESTING to privacy::resetForTesting,
+        Actions.PRIVACY_SHOW_OPTIONS to privacy::showOptions,
         Actions.WEBVIEW_GOTO to ::executeWebviewGoto,
     )
 
@@ -130,6 +141,14 @@ class AdMob : CordovaPlugin() {
         } ?: ctx.reject("ad cls is missing")
     }
 
+    private fun executeAdDestroy(ctx: ExecuteContext) {
+        val id = ctx.optId() ?: return ctx.reject("id is required")
+        cordova.activity.runOnUiThread {
+            ads[id]?.onDestroy()
+            ctx.resolve()
+        }
+    }
+
     private fun executeAdIsLoaded(ctx: ExecuteContext) {
         cordova.activity.runOnUiThread {
             ctx.optAdOrReject()?.let { ad ->
@@ -149,7 +168,7 @@ class AdMob : CordovaPlugin() {
     private fun executeAdShow(ctx: ExecuteContext) {
         cordova.activity.runOnUiThread {
             ctx.optAdOrReject()?.let { ad ->
-                if (ad.isLoaded) {
+                if (shouldDispatchAdShow(ad.isLoaded, ad.canShowWhileLoading)) {
                     ad.show(ctx)
                 } else {
                     ctx.resolve(false)
@@ -207,13 +226,28 @@ class AdMob : CordovaPlugin() {
         }
     }
 
+    override fun onReset() {
+        clearAdState()
+        super.onReset()
+    }
+
     override fun onDestroy() {
-        readyCallbackContext = null
-        for (ad in ads.toMap().values) {
-            ad.onDestroy()
-        }
-        Banner.destroyParentView()
+        clearAdState()
         super.onDestroy()
+    }
+
+    private fun clearAdState() {
+        readyCallbackContext = null
+        eventQueue.clear()
+        val previousAds = synchronized(ads) {
+            ads.values.toList().also { ads.clear() }
+        }
+        cordova.activity.runOnUiThread {
+            for (ad in previousAds) {
+                ad.onDestroy()
+            }
+            Banner.destroyParentView()
+        }
     }
 
     companion object {

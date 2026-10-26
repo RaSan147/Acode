@@ -13,6 +13,10 @@ module.exports = (env, options) => {
     : '';
 
   const rules = [
+    {
+      test: /typescript[\\/]lib[\\/]lib\..*\.d\.ts$/,
+      type: 'asset/source',
+    },
     // TypeScript/TSX files - Custom JSX loader + SWC
     {
       test: /\.tsx?$/,
@@ -38,8 +42,11 @@ module.exports = (env, options) => {
       test: /\.m?js$/,
       oneOf: [
         // Node modules - use builtin:swc-loader only
+        // The codemirror-lsp-client submodule is installed through a "file:"
+        // dependency, so it resolves to its real path outside node_modules. It
+        // still ships pre-built code and must not go through the source loaders.
         {
-          include: /node_modules/,
+          include: /[\\/](?:node_modules|codemirror-lsp-client)[\\/]/,
           use: [
             {
               loader: 'builtin:swc-loader',
@@ -105,9 +112,21 @@ module.exports = (env, options) => {
       resourceQuery: { not: [/raw/, /inline/] },
       type: 'asset/resource',
     },
-    // Regular CSS/SCSS files
+    // Regular CSS files do not need Sass processing. Passing icon CSS through
+    // Sass converts escaped private-use code points into literal characters in
+    // production, which Cordova's asset WebView renders as missing glyphs.
     {
-      test: /\.(?<!\.m\.)(sa|sc|c)ss$/,
+      test: /(?<!\.m)\.css$/,
+      type: 'javascript/auto',
+      use: [
+        rspack.CssExtractRspackPlugin.loader,
+        'css-loader',
+        'postcss-loader',
+      ],
+    },
+    // Regular Sass/SCSS files
+    {
+      test: /\.(?<!\.m\.)(sa|sc)ss$/,
       type: 'javascript/auto',
       use: [
         rspack.CssExtractRspackPlugin.loader,
@@ -120,12 +139,21 @@ module.exports = (env, options) => {
 
   const main = {
     mode,
+    node: {
+      __dirname: false,
+      __filename: false,
+    },
     entry: {
       boot: './src/boot.js',
       main: './src/main.js',
       console: './src/lib/console.js',
+      consoleWorker: './src/lib/consoleWorker.js',
       searchInFilesWorker: './src/sidebarApps/searchInFiles/worker.js',
       searchIndexWorker: './src/sidebarApps/searchInFiles/indexWorker.js',
+      htmlLspWorker: './src/cm/lsp/workers/html.worker.ts',
+      cssLspWorker: './src/cm/lsp/workers/css.worker.ts',
+      jsonLspWorker: './src/cm/lsp/workers/json.worker.ts',
+      typescriptLspWorker: './src/cm/lsp/workers/typescript.worker.ts',
     },
     output: {
       path: path.resolve(__dirname, 'www/build/'),
@@ -135,8 +163,17 @@ module.exports = (env, options) => {
       publicPath: devOrigin ? ''.concat(devOrigin, '/build/') : '/build/',
       clean: !isDev,
     },
+    // TypeScript's Node-only plugin loader uses a dynamic require. It is never
+    // reached by the browser worker, but Rspack cannot prove that statically.
+    ignoreWarnings: [
+      {
+        module: /typescript[\\/]lib[\\/]typescript\.js$/,
+        message: /Critical dependency/,
+      },
+    ],
     module: {
       rules,
+      exprContextCritical: false,
       parser: {
         javascript: {
           exportsPresence: 'error',

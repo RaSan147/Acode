@@ -7,18 +7,21 @@ export default function scrollSettings() {
 	const title = strings["scroll settings"];
 
 	const items = [
-		/*{
+		{
 			key: "scrollSpeed",
 			text: strings["scroll speed"],
 			value: values.scrollSpeed,
 			valueText: getScrollSpeedString,
 			select: [
-				[constants.SCROLL_SPEED_FAST_X2, `${strings.fast} x2`],
-				[constants.SCROLL_SPEED_FAST, strings.fast],
-				[constants.SCROLL_SPEED_NORMAL, strings.normal],
-				[constants.SCROLL_SPEED_SLOW, strings.slow],
+				[config.SCROLL_SPEED_FAST_X2, `${strings.fast} x2`],
+				[config.SCROLL_SPEED_FAST, strings.fast],
+				[config.SCROLL_SPEED_NORMAL, strings.normal],
+				[config.SCROLL_SPEED_SLOW, strings.slow],
 			],
-		},*/
+			info: strings["settings-info-scroll-speed"],
+			// Only canvas editors use it.
+			hidden: values.editorRenderer !== "canvas",
+		},
 		/*{
 			key: "reverseScrolling",
 			text: strings["reverse scrolling"],
@@ -67,9 +70,26 @@ export default function scrollSettings() {
 				["full", strings.full],
 			],
 		},
+		{
+			key: "leftMargin",
+			text: strings["horizontal scroll margin"],
+			value: values.leftMargin ?? 50,
+			valueText: (size) => `${size}px`,
+			prompt: strings["horizontal scroll margin"],
+			promptType: "number",
+			promptOptions: {
+				required: true,
+				test(value) {
+					if (!/^\d+$/.test(String(value).trim())) return false;
+					const size = Number(value);
+					return Number.isSafeInteger(size) && size >= 0;
+				},
+			},
+			info: strings["settings-info-horizontal-scroll-margin"],
+		},
 	];
 
-	return settingsPage(title, items, callback, undefined, {
+	const page = settingsPage(title, items, callback, undefined, {
 		preserveOrder: true,
 		pageClassName: "detail-settings-page",
 		listClassName: "detail-settings-list",
@@ -78,9 +98,16 @@ export default function scrollSettings() {
 		groupByDefault: true,
 	});
 
+	// The page is created once and kept, so follow the renderer from here.
+	appSettings.on("update:editorRenderer", (renderer) => {
+		page.setItemVisibility("scrollSpeed", renderer === "canvas");
+	});
+
+	return page;
+
 	function callback(key, value) {
 		appSettings.update({
-			[key]: value,
+			[key]: key === "leftMargin" ? Number(value) : value,
 		});
 	}
 }

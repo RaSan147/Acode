@@ -25,10 +25,18 @@ fs.copyFileSync(gradleFilePath, androidGradleFilePath);
 // directories that are required later in the build. Keep the generated tree and
 // only overlay this project's custom resources on top of it.
 copyDirRecursively(localResPath, resPath);
+// Cordova can retain plugin Java from an earlier install during prepare.
+// Keep the System plugin's icon map in sync with the launcher resources.
+copyDirRecursively(
+  path.resolve(__dirname, '../src/plugins/system/android'),
+  path.resolve(__dirname, '../platforms/android/app/src/main/java')
+);
 enableLegacyJni();
 enableStaticContext();
+disableSplashFadeOnRealmeAndroid13();
+removeLegacyKeyboardWorkaround();
 patchTargetSdkVersion();
-enableKeyboardWorkaround();
+stripLauncherFilterFromMainActivity();
 
 function getPackageName() {
   const configPath = path.resolve(__dirname, '../config.xml');
@@ -62,6 +70,43 @@ function getTmpDir() {
     console.log("Error: No usable temporary directory found (TMPDIR or /tmp not accessible).");
     return null;
     // process.exit(1);
+  }
+}
+
+/**
+ * Removes the MAIN/LAUNCHER intent-filter from MainActivity in the generated
+ * AndroidManifest. The launcher role is handled by activity-aliases instead
+ * (see config.xml), so that switching app icons at runtime only toggles aliases
+ * and never disables the running MainActivity component (which would otherwise
+ * force-stop/restart the app).
+ */
+function stripLauncherFilterFromMainActivity() {
+  const prefix = execSync('npm prefix').toString().trim();
+  const manifestPath = path.join(
+    prefix,
+    'platforms/android/app/src/main/AndroidManifest.xml'
+  );
+
+  if (!fs.existsSync(manifestPath)) {
+    console.warn('[Cordova Hook] ⚠️ AndroidManifest.xml not found');
+    return;
+  }
+
+  let content = fs.readFileSync(manifestPath, 'utf-8');
+  const updated = content.replace(
+    /(<activity[^>]*\bname="MainActivity"[^>]*>)\s*<intent-filter[^>]*>\s*<action android:name="android\.intent\.action\.MAIN"[^>]*\/>\s*<category android:name="android\.intent\.category\.LAUNCHER"[^>]*\/>\s*<\/intent-filter>/,
+    '$1'
+  );
+
+  if (updated !== content) {
+    fs.writeFileSync(manifestPath, updated, 'utf-8');
+    console.log(
+      '[Cordova Hook] ✅ Removed launcher intent-filter from MainActivity'
+    );
+  } else {
+    console.log(
+      '[Cordova Hook] ✅ Launcher intent-filter already removed, skipping'
+    );
   }
 }
 
@@ -210,8 +255,8 @@ function enableStaticContext() {
   }
 }
 
-function enableKeyboardWorkaround() {
-  try{
+function disableSplashFadeOnRealmeAndroid13() {
+  try {
     const prefix = execSync('npm prefix').toString().trim();
     const packageName = getPackageName();
     const mainActivityPath = path.join(
@@ -228,44 +273,96 @@ function enableKeyboardWorkaround() {
 
     let content = fs.readFileSync(mainActivityPath, 'utf-8');
 
-    // Skip if already patched
-    if (content.includes('SoftInputAssist')) {
-      console.log('[Cordova Hook] ✅ Keyboard workaround already enabled, skipping');
+    if (
+      content.includes('hasBrokenRealmeSplashTransfer()') &&
+      content.includes('preferences.set("FadeSplashScreen", false);')
+    ) {
+      console.log('[Cordova Hook] ✅ realme splash workaround already enabled, skipping');
       return;
     }
 
-    // Add import
-    if (!content.includes('import com.foxdebug.system.SoftInputAssist;')) {
+    if (!content.includes('import android.os.Build;')) {
       content = content.replace(
-        /import java.lang.ref.WeakReference;|import org\.apache\.cordova\.\*;/,
-        match =>
-          match + '\nimport com.foxdebug.system.SoftInputAssist;'
+        /import android\.os\.Bundle;/,
+        'import android.os.Build;\nimport android.os.Bundle;'
       );
     }
 
-    // Declare field
-    if (!content.includes('private SoftInputAssist softInputAssist;')) {
-      content = content.replace(
-        /public class MainActivity extends CordovaActivity\s*\{/,
-        match =>
-          match +
-          `\n\n    private SoftInputAssist softInputAssist;\n`
-      );
-    }
-
-    // Initialize in onCreate
     content = content.replace(
-      /loadUrl\(launchUrl\);/,
-      `loadUrl(launchUrl);\n\n        softInputAssist = new SoftInputAssist(this);`
+      /\n\s*@Override\n\s*public void onCreate\(Bundle savedInstanceState\)/,
+      `
+
+    private static boolean hasBrokenRealmeSplashTransfer() {
+        return Build.VERSION.SDK_INT == Build.VERSION_CODES.TIRAMISU
+            && ("realme".equalsIgnoreCase(Build.MANUFACTURER)
+                || "realme".equalsIgnoreCase(Build.BRAND));
+    }
+
+    @Override
+    protected void loadConfig() {
+        super.loadConfig();
+
+        // Some realme Android 13 builds pass a null SurfaceControl while handing the
+        // splash view to an app-provided exit animation. Avoid only that handoff.
+        if (hasBrokenRealmeSplashTransfer()) {
+            preferences.set("FadeSplashScreen", false);
+        }
+    }
+
+    @Override
+    public void onCreate(Bundle savedInstanceState)`
     );
 
+    if (!content.includes('preferences.set("FadeSplashScreen", false);')) {
+      console.warn('[Cordova Hook] ⚠️ Unable to inject realme splash workaround');
+      return;
+    }
+
     fs.writeFileSync(mainActivityPath, content, 'utf-8');
-    console.log('[Cordova Hook] ✅ Enabled keyboard workaround');
+    console.log('[Cordova Hook] ✅ Disabled splash fade on realme Android 13');
   } catch (err) {
-    console.error('[Cordova Hook] ❌ Failed to enable keyboard workaround:', err.message);
+    console.error(
+      '[Cordova Hook] ❌ Failed to patch realme splash workaround:',
+      err.message
+    );
   }
 }
 
+function removeLegacyKeyboardWorkaround() {
+  try {
+    const prefix = execSync('npm prefix').toString().trim();
+    const packageName = getPackageName();
+    const mainActivityPath = path.join(
+      prefix,
+      'platforms/android/app/src/main/java',
+      packageName.replace(/\./g, '/'),
+      'MainActivity.java'
+    );
+
+    if (!fs.existsSync(mainActivityPath)) {
+      return;
+    }
+
+    const content = fs.readFileSync(mainActivityPath, 'utf-8');
+    const updatedContent = content
+      .replace(/\r?\nimport com\.foxdebug\.system\.SoftInputAssist;/, '')
+      .replace(/\r?\n\s*private SoftInputAssist softInputAssist;\r?\n/, '\n')
+      .replace(
+        /\r?\n\s*softInputAssist = new SoftInputAssist\(this\);/,
+        ''
+      );
+
+    if (updatedContent !== content) {
+      fs.writeFileSync(mainActivityPath, updatedContent, 'utf-8');
+      console.log('[Cordova Hook] ✅ Removed legacy keyboard workaround');
+    }
+  } catch (err) {
+    console.error(
+      '[Cordova Hook] ❌ Failed to remove legacy keyboard workaround:',
+      err.message
+    );
+  }
+}
 
 /**
  * Copy directory recursively

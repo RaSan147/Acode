@@ -1,5 +1,166 @@
 # Change Log
 
+## v1.13.5
+
+* fix(terminal): stop proot "can't sanitize binding" fd warnings by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2878
+* fix(editor): preserve indentation on soft-wrapped lines by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2880
+* feat(editor): add context menu for closing file tabs by @TonyGeez in https://github.com/Acode-Foundation/Acode/pull/2863
+* perf(editor): index language modes instead of sorting on every lookup by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2881
+* feat: improve console virtualisation by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2882
+* fix(search): prevent discovery restarts and stream results efficiently by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2883
+* feat(editor): add configurable word wrap indentation by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2886
+* fix: API calls throwing internal server errors by @deadlyjack in https://github.com/Acode-Foundation/Acode/pull/2888
+* fix(editor): add monaco-style punctuation wrap opportunities by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2890
+
+## v1.13.4
+
+* fix: prevent Cordova exec startup race by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2851
+* fix(editor): improve selection contrast on active lines by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2852
+* fix(editor): treat missing write capability as editable by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2853
+* fix: race condition when moving to exact line/col by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2856
+* Add GitHub Actions workflow for congratulating Community PRs by @UnschooledGamer in https://github.com/Acode-Foundation/Acode/pull/2855
+* Shortcut For Opening Welcome Tab  by @Game-Dev-Shubham in https://github.com/Acode-Foundation/Acode/pull/2773
+* chore: Add Lingala (ln) translation by @Degrace15 in https://github.com/Acode-Foundation/Acode/pull/2775
+* feat: added icons and api by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2732
+* feat: httpStream api by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2841
+* fix: app icon picker and banner hide on reload by @deadlyjack in https://github.com/Acode-Foundation/Acode/pull/2867
+* fix: settings category for app icon and theme by @deadlyjack in https://github.com/Acode-Foundation/Acode/pull/2872
+* fix(devcontainer):  update docker base image from bullseye to bookworm by @maaz7409 in https://github.com/Acode-Foundation/Acode/pull/2870
+
+## v1.13.3
+
+* refactor(file-browser): Replace plain object directory cache with `Map` by @AuDevTist1C in https://github.com/Acode-Foundation/Acode/pull/2831
+* fix(editor): stabilize selection menu sizing and transitions by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2833
+* fix(editor): keep fullscreen controls above bottom pane tabs by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2834
+* chore(community-release-notifier): Change sed parsing - TG release notes by @UnschooledGamer in https://github.com/Acode-Foundation/Acode/pull/2832
+* fix(editor): restore cursor state and prevent tab-switch flash by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2835
+* feat(lsp): improve actions, navigation, and position handling by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2837
+* fix(editor): highlight all visible search matches by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2838
+* Translation: Update hu-hu.json by @summoner001 in https://github.com/Acode-Foundation/Acode/pull/2828
+* chore(deps): bump actions/setup-java from 5 to 6 by @dependabot[bot] in https://github.com/Acode-Foundation/Acode/pull/2821
+* feat: improved pluginContext by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2806
+* fix(webview): retain instance when destroy fails by @azamkassim in https://github.com/Acode-Foundation/Acode/pull/2836
+* fix(sftp): recover from failed profile migration by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2840
+
+## v1.13.2
+
+* feat: stabilize SFTP and add secure SSH terminal integration by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2694
+* fix(lsp): correct workspace and document color capabilities and add tailwind lsp by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2736
+* refactor: Standardize DOM element dataset attributes across file browser component by @AuDevTist1C in https://github.com/Acode-Foundation/Acode/pull/2543
+* fix(lsp): preserve websocket clients across tab switches by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2764
+* feat(plugins): expose static CodeMirror highlighter by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2769
+* refactor(loader): Extract `tailSpin` SVG component and dynamic gradient logic by @AuDevTist1C in https://github.com/Acode-Foundation/Acode/pull/2776
+* fix(quick-tools): prevent scrollbars during editor gestures by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2777
+* fix: fall back to internal storage when external storage is unavailable by @ulite-Amr in https://github.com/Acode-Foundation/Acode/pull/2781
+* fix(theme): prevent freeze when switching to system theme by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2790
+* fix(sftp): cancel stalled connections and prevent delayed errors by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2791
+* fix: admob issues by @deadlyjack in https://github.com/Acode-Foundation/Acode/pull/2800
+* fix(android): avoid splash surface crash on realme Android 13 by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2805
+* fix(session): restore picker documents and skip intent files tab by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2809
+* feat(console): isolate execution and improve mobile REPL UX by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2808
+* feat(console): follow active Acode theme by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2814
+* chore: improve Indonesian (id) language translations by @MatrixTM26 in https://github.com/Acode-Foundation/Acode/pull/2798
+* fix: preserve MIME type for plugin icons on plugin details page by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2818
+* fix(console): run JavaScript files in isolated worker by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2819
+* feat: plugin review by @deadlyjack in https://github.com/Acode-Foundation/Acode/pull/2826
+* Improve selection menu UX and plugin action overflow by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2813
+* fix(search): include restored files in global search by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2830
+
+## v1.12.9
+
+* fix(admob): remove the policy-prohibited interstitial shown while exiting the app
+
+## v1.12.8
+
+* fix(terminal): close tab on process end and speed up long-press select by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2587
+* fix(editor): prevent false language mode recommendations by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2621
+* fix(lsp): send workspace folders during initialization by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2623
+* fix(admob): harden consent, banners, and variant builds by @deadlyjack in https://github.com/Acode-Foundation/Acode/pull/2553
+* feat(lsp): add multi-server support to CodeMirror LSP client by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2627
+
+## v1.12.7
+
+* fix: scroll shift when tab switching by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2329
+* Fixes several small querks and inconsistencies to improve UI/UX by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2331
+* feat: add setting to toggle emmet by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2332
+* feat: add a ui to manage running Terminal (Executor) processes by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2333
+* fix(settings): preserve scroll state and avoid full rerenders by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2348
+* fix: removed annoying terminal dialog by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2349
+* Better regex by @Palloxin in https://github.com/Acode-Foundation/Acode/pull/2325
+* fix(lsp): hover tooltip code highlighting by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2353
+* fix(lsp): scope cache fallback by runtime provider by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2354
+* feat: dont invoke acode service when uninstalling terminal by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2350
+* fix: run new files even if marked saved by @deadlyjack in https://github.com/Acode-Foundation/Acode/pull/2360
+* perf(settings): lazy load sub-settings pages to optimize load time by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2358
+* fix: ignore files to be treated as plugin in src/plugins by @deadlyjack in https://github.com/Acode-Foundation/Acode/pull/2362
+* feat: add setting to toggle `language package completion` by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2361
+* feat(performance): removed double memory usage when reading/writing text files by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2359
+* feat: add language-mode plugin recommendation system by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2368
+* feat(keybind): add code folds keybinds by @UnschooledGamer in https://github.com/Acode-Foundation/Acode/pull/2369
+* fix(editor): apply plugin language modes after restore (for plugin modes) by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2375
+* fix: Use inline themed SVG for loader spinner by @deadlyjack in https://github.com/Acode-Foundation/Acode/pull/2379
+* fix: wait for plugin load before recommendation trigger by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2383
+* fix: don't check for app updates from github when app is from playstore by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2385
+* feat: improved ux by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2382
+* fix: Fixes bug in settings UI by @claycuy in https://github.com/Acode-Foundation/Acode/pull/2388
+* feat: lazy load things which are low-risk from main by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2386
+* fix(quicktools): preserve editor focus during rapid taps and stale issue by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2408
+* feat: new 'SEL' Command for Quick Tools by @Elitex07 in https://github.com/Acode-Foundation/Acode/pull/2414
+* feat(ui): use motion for page, tab, switch and press gestures animation by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2406
+* refactor(core): centralize plugin unmount error boundary and fix console telemetry by @AuDevTist1C in https://github.com/Acode-Foundation/Acode/pull/2422
+* fix: language mode mapping to add maps for paths which doesnt exists by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2430
+* fix(editor): preserve restored tab editability while loading by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2431
+* fix(quicktools): prevent editor blur when tapping toolbar immediately after typing by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2432
+* feat: add native app auth code login flow by @deadlyjack in https://github.com/Acode-Foundation/Acode/pull/2440
+* feat: improve CodeMirror quick tools modifier support by @deadlyjack in https://github.com/Acode-Foundation/Acode/pull/2435
+* fix(security) critical security issue by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2442
+* fix: skip recommendation for binary file by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2446
+* feat(editor): implement multi-pane split layout by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2416
+* fix: plugin page ui for big screen by @deadlyjack in https://github.com/Acode-Foundation/Acode/pull/2448
+* fix(editor): prevent styling loss flash on custom page tabs when splitting/closing panes by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2449
+* feat(lsp): group language servers into built-in, plugin, and custom categories by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2452
+* refactor(ui): improved toast and notification animations using motion by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2453
+* feat: added native crash handler by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2450
+* feat: make the clear command behave as reset by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2458
+* feat: Add hover and long press tooltips to quicktools items by @gahanad in https://github.com/Acode-Foundation/Acode/pull/2456
+* fix: add missing autoclosebracket keymap(paired bracket deletion) by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2472
+* fix: implement editor tab history navigation (#1819) by @Elitex07 in https://github.com/Acode-Foundation/Acode/pull/2459
+* fix(lsp): refresh installation status on the correct settings page by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2482
+* fix(editor): sync replacement untitled file state by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2483
+* feat: add cobalt editor theme by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2484
+* fix: zip project import by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2473
+* chore: update the xtermjs to v6 and fix session creation by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2487
+* fix(editor): improve wrapped line indentation and keep text wrap off by default by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2507
+* fix(editor): prevent syntax highlight color flicker on state recreation (#2304) by @Elitex07 in https://github.com/Acode-Foundation/Acode/pull/2457
+* Make line commands aware of folded blocks by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2508
+* fix: move bashrc sourcing to bottom of initrc so bashrc can override … by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2523
+* fix(settings): sync global search switch behavior and animation by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2527
+* refactor(editor): centralize CodeMirror commands and keybindings by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2516
+* feat(lsp): add document color chips with regex fallback by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2533
+* feat(lsp): add pull diagnostics and native TypeScript 7 by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2537
+* feat(lsp): add web worker language servers as defaults by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2531
+* fix: system theme by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2524
+* feat(editor): add indentation folding for legacy modes(as fallback) by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2538
+* feat: add WebView Plugin API by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2525
+* feat(files): move workspace indexing and search to native for saf/files by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2529
+* fix: upgrade tar to 7.5.19 (CVE-2026-59873) by @anupamme in https://github.com/Acode-Foundation/Acode/pull/2544
+* fix(fileBrowser): exclude non-selectable system utility tiles from batch selection operations by @AuDevTist1C in https://github.com/Acode-Foundation/Acode/pull/2545
+* refactor(file-browser): extract reusable deletion logic and abstract Termux URI validation by @AuDevTist1C in https://github.com/Acode-Foundation/Acode/pull/2548
+* feat(file-browser): integrate selection mode state with `actionStack` for back navigation by @AuDevTist1C in https://github.com/Acode-Foundation/Acode/pull/2546
+* feat(files): skip excluded paths during copy operations by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2555
+* fix: the processutils in ProcessUtils.java by @anupamme in https://github.com/Acode-Foundation/Acode/pull/2557
+* fix: sanitize input hints to prevent XSS by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2559
+* feat: proot debug toggle by @RohitKushvaha01 in https://github.com/Acode-Foundation/Acode/pull/2563
+* Improve recent dialog path readability by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2567
+* Fix CodeMirror theme colors and add Catppuccin variants by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2568
+* feat(editor): add configurable horizontal scroll margin to CodeMirror by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2569
+* fix(quick-tools): add visible close button to search when toggler is off by @bajrangCoder in https://github.com/Acode-Foundation/Acode/pull/2570
+* i18n: update Hungarian translations by @summoner001 in https://github.com/Acode-Foundation/Acode/pull/2207, https://github.com/Acode-Foundation/Acode/pull/2387, https://github.com/Acode-Foundation/Acode/pull/2429, https://github.com/Acode-Foundation/Acode/pull/2478, https://github.com/Acode-Foundation/Acode/pull/2485, https://github.com/Acode-Foundation/Acode/pull/2542, https://github.com/Acode-Foundation/Acode/pull/2558
+* i18n: update Indonesian translations and localization strings by @claycuy in https://github.com/Acode-Foundation/Acode/pull/2330, https://github.com/Acode-Foundation/Acode/pull/2372, https://github.com/Acode-Foundation/Acode/pull/2417, https://github.com/Acode-Foundation/Acode/pull/2479
+* i18n: update Simplified and Traditional Chinese translations by @LaunchLee in https://github.com/Acode-Foundation/Acode/pull/2468, https://github.com/Acode-Foundation/Acode/pull/2571
+* i18n: update Yemeni Arabic translations by @mohamedElneser in https://github.com/Acode-Foundation/Acode/pull/2480
+* i18n: update Indonesian translations by @Elderellerser in https://github.com/Acode-Foundation/Acode/pull/2491
+
 ## v1.12.6
 
 * Refactor boot script and add editor interaction handler by @deadlyjack in https://github.com/Acode-Foundation/Acode/pull/2216

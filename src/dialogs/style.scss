@@ -49,6 +49,14 @@
     z-index: 113;
   }
 
+  &.above-overlay {
+    z-index: 1001;
+
+    & + .mask {
+      z-index: 1000;
+    }
+  }
+
   &.multi {
     textarea:not(:first-of-type) {
       margin-top: 20px;
@@ -56,7 +64,8 @@
   }
 
   &.confirm,
-  &.alert {
+  &.alert,
+  &.app-icon-dialog {
     .title {
       text-transform: uppercase;
     }
@@ -96,6 +105,79 @@
     }
   }
 
+  &.select.recent-select {
+    width: calc(100vw - 32px);
+    min-width: 280px;
+    max-width: 420px;
+
+    .title {
+      justify-content: flex-start;
+      min-height: 48px;
+      margin-inline: 18px;
+    }
+
+    ul {
+      padding: 4px 10px 10px;
+    }
+
+    .tile.recent-entry {
+      height: 60px;
+      justify-content: flex-start;
+
+      > .icon {
+        width: 48px;
+        min-width: 48px;
+        height: 60px;
+        font-size: 1.45em;
+      }
+
+      > .text.has-sub-text {
+        min-width: 0;
+        font-size: 1rem;
+        font-weight: 600;
+        line-height: 1.35;
+
+        > .select-sub-text {
+          display: block;
+          overflow: hidden;
+          color: var(--secondary-text-color);
+          direction: rtl;
+          font-size: 0.72rem;
+          font-weight: 400;
+          opacity: 0.75;
+          text-align: left;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+
+          > .select-sub-text-content {
+            direction: ltr;
+            unicode-bidi: isolate;
+          }
+        }
+      }
+
+      > .clearclose {
+        width: 48px;
+        min-width: 48px;
+        height: 48px;
+        font-size: 1.2em;
+        opacity: 0.72;
+      }
+    }
+
+    .tile.recent-clear {
+      height: 48px;
+      justify-content: flex-start;
+
+      > .icon {
+        width: 48px;
+        min-width: 48px;
+        height: 48px;
+        font-size: 1.2em;
+      }
+    }
+  }
+
   ul {
     overflow-y: auto;
     padding: 10px;
@@ -131,10 +213,9 @@
     z-index: 111;
     background-color: rgb(0, 0, 0);
     opacity: 0.4;
-    animation: mask-enter 180ms ease-out forwards;
 
-    ~ .mask {
-      opacity: 0;
+    &:has(~ .prompt:not(.hide) + .mask) {
+      opacity: 0 !important;
     }
   }
 
@@ -145,8 +226,6 @@
     opacity: 0 !important;
 
     & + .mask {
-      animation: none;
-      transition: opacity 180ms ease-in-out;
       opacity: 0 !important;
     }
   }

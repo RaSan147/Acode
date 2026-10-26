@@ -1,34 +1,39 @@
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { EditorView, lineNumbers } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
+import { memberProperty } from "../highlightTags";
 
 export const config = {
 	name: "tokyoNight",
 	dark: true,
 	background: "#1a1b26",
-	foreground: "#787c99",
+	foreground: "#a9b1d6",
 	selection: "#515c7e40",
 	cursor: "#c0caf5",
 	dropdownBackground: "#1a1b26",
-	dropdownBorder: "#787c99",
-	activeLine: "#43455c22",
-	lineNumber: "#363b54",
-	lineNumberActive: "#737aa2",
-	matchingBracket: "#16161e",
+	dropdownBorder: "#414868",
+	// Keep this translucent: CodeMirror draws selections behind line backgrounds.
+	activeLine: "#6a83ce20",
+	lineNumber: "#414868",
+	lineNumberActive: "#a9b1d6",
+	matchingBracket: "#24283b",
 	keyword: "#bb9af7",
 	storage: "#bb9af7",
 	variable: "#c0caf5",
-	parameter: "#c0caf5",
+	parameter: "#cfc9c2",
 	function: "#7aa2f7",
+	memberProperty: "#7dcfff",
 	string: "#9ece6a",
-	constant: "#bb9af7",
-	type: "#0db9d7",
+	constant: "#ff9e64",
+	type: "#2ac3de",
 	class: "#c0caf5",
 	number: "#ff9e64",
-	comment: "#444b6a",
-	heading: "#89ddff",
-	invalid: "#ff5370",
+	comment: "#565f89",
+	heading: "#7dcfff",
+	invalid: "#f7768e",
 	regexp: "#b4f9f8",
+	tag: "#f7768e",
+	operator: "#bb9af7",
 };
 
 export const tokyoNightTheme = EditorView.theme(
@@ -106,6 +111,10 @@ export const tokyoNightTheme = EditorView.theme(
 );
 
 export const tokyoNightHighlightStyle = HighlightStyle.define([
+	{
+		tag: [memberProperty, t.definition(memberProperty)],
+		color: config.memberProperty,
+	},
 	{ tag: t.keyword, color: config.keyword },
 	{
 		tag: [t.name, t.deleted, t.character, t.macroName],
@@ -116,7 +125,16 @@ export const tokyoNightHighlightStyle = HighlightStyle.define([
 		tag: [t.processingInstruction, t.string, t.inserted, t.special(t.string)],
 		color: config.string,
 	},
-	{ tag: [t.function(t.variableName), t.labelName], color: config.function },
+	{
+		tag: [
+			t.function(t.variableName),
+			t.function(t.propertyName),
+			t.function(t.definition(t.propertyName)),
+			t.function(t.definition(t.variableName)),
+			t.labelName,
+		],
+		color: config.function,
+	},
 	{
 		tag: [t.color, t.constant(t.name), t.standard(t.name)],
 		color: config.constant,
@@ -127,10 +145,11 @@ export const tokyoNightHighlightStyle = HighlightStyle.define([
 		tag: [t.number, t.changed, t.annotation, t.modifier, t.self, t.namespace],
 		color: config.number,
 	},
-	{ tag: [t.typeName], color: config.type, fontStyle: config.type },
-	{ tag: [t.operator, t.operatorKeyword], color: config.keyword },
+	{ tag: [t.typeName], color: config.type },
+	{ tag: [t.operator, t.operatorKeyword], color: config.operator },
 	{ tag: [t.url, t.escape, t.regexp, t.link], color: config.regexp },
 	{ tag: [t.meta, t.comment], color: config.comment },
+	{ tag: t.tagName, color: config.tag },
 	{ tag: t.strong, fontWeight: "bold" },
 	{ tag: t.emphasis, fontStyle: "italic" },
 	{ tag: t.link, textDecoration: "underline" },

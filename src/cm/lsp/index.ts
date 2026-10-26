@@ -1,5 +1,9 @@
 import "./runtimes/registerBuiltins";
 
+export type {
+	LspWorkerHostHandler,
+	LspWorkerTransportOptions,
+} from "./api";
 export {
 	bundles,
 	default as lspApi,
@@ -12,6 +16,7 @@ export {
 	servers,
 	unregisterRuntime,
 	upsert,
+	workers,
 } from "./api";
 export { default as clientManager, LspClientManager } from "./clientManager";
 export type { CodeActionItem } from "./codeActions";
@@ -26,6 +31,16 @@ export {
 	supportsCodeActions,
 } from "./codeActions";
 export {
+	goToDeclaration,
+	goToDefinition,
+	goToImplementation,
+	goToTypeDefinition,
+	jumpToDeclaration,
+	jumpToDefinition,
+	jumpToImplementation,
+	jumpToTypeDefinition,
+} from "./definition";
+export {
 	clearDiagnosticsEffect,
 	getLspDiagnostics,
 	LSP_DIAGNOSTICS_EVENT,
@@ -33,6 +48,21 @@ export {
 	lspDiagnosticsExtension,
 	lspDiagnosticsUiExtension,
 } from "./diagnostics";
+export type {
+	DocumentColorsConfig,
+	LspDocumentColor,
+} from "./documentColors";
+export {
+	cssToLspColor,
+	didReplaceLspDocumentColors,
+	documentColorsClientExtension,
+	documentColorsEditorExtension,
+	documentColorsExtension,
+	hasColorProvider,
+	lspColorToCss,
+	lspColorToHex,
+	lspDocumentColorsField,
+} from "./documentColors";
 export type {
 	DocumentSymbolsResult,
 	FlatSymbol,
@@ -49,21 +79,6 @@ export {
 	supportsDocumentSymbols,
 } from "./documentSymbols";
 export { registerLspFormatter } from "./formatter";
-export type {
-	DocumentColorsConfig,
-	LspDocumentColor,
-} from "./documentColors";
-export {
-	cssToLspColor,
-	didReplaceLspDocumentColors,
-	documentColorsClientExtension,
-	documentColorsEditorExtension,
-	documentColorsExtension,
-	hasColorProvider,
-	lspColorToCss,
-	lspColorToHex,
-	lspDocumentColorsField,
-} from "./documentColors";
 export type { InlayHintsConfig } from "./inlayHints";
 export {
 	inlayHintsClientExtension,
@@ -74,9 +89,9 @@ export {
 	addLspLog,
 	clearLspLogs,
 	getLspLogs,
-	onLspLog,
 	type LspLogEntry,
 	type LspLogLevel,
+	onLspLog,
 } from "./logs";
 export {
 	closeReferencesPanel,
@@ -89,10 +104,13 @@ export {
 	renameSymbol,
 } from "./rename";
 export {
-	ensureServerRunning,
-	resetManagedServers,
-	stopManagedServer,
-} from "./serverLauncher";
+	checkRuntimeServerInstallation,
+	getRuntimeInstallCommand,
+	getRuntimeLabelForServer,
+	getRuntimeUninstallCommand,
+	installRuntimeServer,
+	uninstallRuntimeServer,
+} from "./runtimeActions";
 export {
 	BUILTIN_ALPINE_RUNTIME_ID,
 	EXTERNAL_WEBSOCKET_RUNTIME_ID,
@@ -103,15 +121,8 @@ export {
 	registerRuntimeProvider,
 	selectRuntimeProvider,
 	unregisterRuntimeProvider,
+	WEB_WORKER_RUNTIME_ID,
 } from "./runtimeProviders";
-export {
-	checkRuntimeServerInstallation,
-	getRuntimeInstallCommand,
-	getRuntimeLabelForServer,
-	getRuntimeUninstallCommand,
-	installRuntimeServer,
-	uninstallRuntimeServer,
-} from "./runtimeActions";
 export {
 	AUTO_RUNTIME_ID,
 	getDefaultRuntimeSetting,
@@ -119,6 +130,11 @@ export {
 	setDefaultRuntime,
 	setServerRuntime,
 } from "./runtimeSettings";
+export {
+	ensureServerRunning,
+	resetManagedServers,
+	stopManagedServer,
+} from "./serverLauncher";
 export { default as serverRegistry } from "./serverRegistry";
 export {
 	nextSignature,
@@ -126,7 +142,6 @@ export {
 	showSignatureHelp,
 } from "./tooltipExtensions";
 export { createTransport } from "./transport";
-
 export type {
 	BuiltinExtensionsConfig,
 	ClientManagerOptions,
@@ -139,8 +154,8 @@ export type {
 	LSPDiagnostic,
 	LSPFormattingOptions,
 	LSPPluginAPI,
-	LspDiagnostic,
 	LspClientScope,
+	LspDiagnostic,
 	LspRuntimeConnection,
 	LspRuntimeContext,
 	LspRuntimeProvider,
@@ -152,7 +167,8 @@ export type {
 	TextEdit,
 	TransportDescriptor,
 	TransportHandle,
-	WorkspaceOptions,
 	WorkspaceKind,
+	WorkspaceOptions,
 } from "./types";
+export { createWorkerTransport } from "./workerTransport";
 export { default as AcodeWorkspace } from "./workspace";

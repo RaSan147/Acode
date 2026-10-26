@@ -1,6 +1,5 @@
 import "./styles.scss";
 import fsOperation from "fileSystem";
-import { EditorView } from "@codemirror/view";
 import autosize from "autosize";
 import { getDocText } from "cm/editorUtils";
 import Checkbox from "components/checkbox";
@@ -8,11 +7,14 @@ import Sidebar, { preventSlide } from "components/sidebar";
 import escapeStringRegexp from "escape-string-regexp";
 import Reactive from "html-tag-js/reactive";
 import Ref from "html-tag-js/ref";
+import fileIndex from "lib/fileIndex";
 import files, { Tree, whenReady as waitForFileList } from "lib/fileList";
 import openFile from "lib/openFile";
+import { addedFolder } from "lib/openFolder";
 import settings from "lib/settings";
 import helpers from "utils/helpers";
 import { createSearchResultView } from "./cmResultView";
+import navigateToResult from "./navigateToResult";
 
 // Local highlight sources
 const words = [];
@@ -40,6 +42,8 @@ const $progress = Reactive();
 const $indexStatus = Reactive("");
 
 const FILE_LIST_WAIT_TIMEOUT = 250;
+const FILE_LIST_MAX_WAIT = 5000;
+let pendingDiscoveryVersion = null;
 const SEARCH_WORKER_COUNT = 1;
 
 const resultOverview = {
@@ -116,6 +120,10 @@ let searching = false;
 let searchVersion = 0;
 let pendingResultText = "";
 let pendingResultFlush = 0;
+let nativeResultQueue = [];
+let nativeResultCursor = 0;
+let nativeResultFrame = 0;
+let pendingNativeSearchFinishVersion = null;
 let nativeSearchId = null;
 let activeSearchTasks = 0;
 let activeReplaceTasks = 0;
@@ -138,7 +146,7 @@ $container.onref = ($el) => {
 	searchResult = createSearchResultView($el, {
 		onLineClick: onCursorChange,
 		getWords: () => words,
-		getFileNames: () => fileNames,
+		getFileInfo: (line) => fileNames[results[line]?.file],
 		getRegex: () => currentSearchRegex,
 	});
 	searchResult.view.scrollDOM?.addEventListener(
@@ -310,16 +318,32 @@ async function onWorkerMessage(e) {
 	}
 
 	switch (action) {
+		case "processing":
+			clearTimeout(e.target.searchWatchdog);
+			e.target.searchWatchdog = setTimeout(() => {
+				if (version !== searchVersion) return;
+				$error.value = "Search timed out; simplify the expression";
+				terminateWorker(false);
+				if (replacing) finishReplaceTask(version);
+				else finishSearchTask(version);
+			}, 2000);
+			break;
+		case "processed":
+			clearTimeout(e.target.searchWatchdog);
+			break;
 		case "get-file": {
 			let readError;
 
 			let content = "";
 			try {
-				content = await readSearchFileContent(data);
+				content = await withTimeout(readSearchFileContent(data), 30000);
+				if (content === TIMEOUT) throw new Error("File read timed out");
 			} catch (er) {
-				readError = er;
+				readError = er?.message || String(er);
+				if (version === searchVersion) $error.value = readError;
 			}
 
+			if (version !== searchVersion) return;
 			e.target.postMessage({
 				id,
 				action: "get-file",
@@ -330,7 +354,9 @@ async function onWorkerMessage(e) {
 		}
 
 		case "search-result": {
+			clearTimeout(e.target.searchWatchdog);
 			appendSearchResult(data);
+			e.target.postMessage({ action: "result-ack", id });
 			break;
 		}
 
@@ -371,7 +397,7 @@ async function onWorkerMessage(e) {
 				startedWorkers.reduce((acc, { progress = 0 }) => acc + progress, 0) /
 					startedWorkers.length,
 			);
-			$progress.value = progress;
+			$progress.value = Math.min(progress, 99);
 			break;
 		}
 
@@ -382,30 +408,26 @@ async function onWorkerMessage(e) {
 
 function appendSearchResult(data) {
 	const { file, matches, limited } = data;
-
+	const hasResults = results.length > 0;
 	if (!matches.length) return;
-	if (filesSearched.find((item) => item.url === file.url)) return;
-
-	filesSearched.push(Tree.fromJSON(file));
-	if (filesSearched.length === 1) {
-		searchResult.setValue("");
+	let index = filesSearched.findIndex((item) => item.url === file.url);
+	if (index < 0) {
+		index = filesSearched.length;
+		filesSearched.push(Tree.fromJSON(file));
+		if (filesSearched.length === 1) searchResult.setValue("");
+		resultOverview.filesCount += 1;
+		fileNames.push({ name: file.name, path: file.path, count: 0 });
 	}
-	resultOverview.filesCount += 1;
+	fileNames[index].count += matches.length;
 	resultOverview.matchesCount += matches.length;
 	$resultOverview.innerHTML = searchResultText(
 		resultOverview.filesCount,
 		resultOverview.matchesCount,
 	);
-
-	const index = filesSearched.length - 1;
+	const continuation =
+		results.length && results[results.length - 1].file === index;
 	const displayRows = groupMatchesForDisplay(matches);
-	results.push({
-		file: index,
-		match: null,
-		position: null,
-	});
-
-	fileNames.push({ name: file.name, path: file.path, count: matches.length });
+	if (!continuation) results.push({ file: index, match: null, position: null });
 	for (const result of matches) {
 		result.file = index;
 		if (words.length < MAX_HL_WORDS) {
@@ -413,24 +435,66 @@ function appendSearchResult(data) {
 			if (!words.includes(token)) words.push(token);
 		}
 	}
-	for (const { result } of displayRows) {
-		results.push(result);
-	}
-	if (limited) {
-		results.push({
-			file: index,
-			match: null,
-			position: null,
-			notice: true,
-		});
+	for (const { result } of displayRows) results.push(result);
+	if (limited)
+		results.push({ file: index, match: null, position: null, notice: true });
+	const text = formatSearchResultText(file, displayRows, limited, continuation);
+	appendSearchResultText(`${hasResults ? "\n" : ""}${text}`);
+}
+
+function enqueueNativeSearchResults(batch, version) {
+	if (!Array.isArray(batch) || version !== searchVersion) return;
+	nativeResultQueue.push(...batch);
+	scheduleNativeResultDrain(version);
+}
+
+function scheduleNativeResultDrain(version) {
+	if (nativeResultFrame) return;
+	const schedule =
+		window.requestAnimationFrame || ((callback) => setTimeout(callback, 16));
+	nativeResultFrame = schedule(() => drainNativeSearchResults(version));
+}
+
+function drainNativeSearchResults(version) {
+	nativeResultFrame = 0;
+	if (version !== searchVersion) {
+		clearNativeResultQueue();
+		return;
 	}
 
-	const text = formatSearchResultText(file, displayRows, limited);
-	if (fileNames.length > 1) {
-		appendSearchResultText(`\n${text}`);
-	} else {
-		appendSearchResultText(text);
+	const start = performance.now();
+	let processed = 0;
+	while (
+		nativeResultCursor < nativeResultQueue.length &&
+		processed < 4 &&
+		performance.now() - start < 8
+	) {
+		appendSearchResult(nativeResultQueue[nativeResultCursor++]);
+		processed += 1;
 	}
+
+	if (nativeResultCursor < nativeResultQueue.length) {
+		scheduleNativeResultDrain(version);
+		return;
+	}
+
+	nativeResultQueue = [];
+	nativeResultCursor = 0;
+	if (pendingNativeSearchFinishVersion === version) {
+		pendingNativeSearchFinishVersion = null;
+		void finishSearchTask(version);
+	}
+}
+
+function clearNativeResultQueue() {
+	if (nativeResultFrame) {
+		const cancel = window.cancelAnimationFrame || clearTimeout;
+		cancel(nativeResultFrame);
+	}
+	nativeResultFrame = 0;
+	nativeResultQueue = [];
+	nativeResultCursor = 0;
+	pendingNativeSearchFinishVersion = null;
 }
 
 function groupMatchesForDisplay(matches) {
@@ -449,8 +513,13 @@ function groupMatchesForDisplay(matches) {
 	return rows;
 }
 
-function formatSearchResultText(file, displayRows, limited) {
-	const lines = [file.name];
+function formatSearchResultText(
+	file,
+	displayRows,
+	limited,
+	continuation = false,
+) {
+	const lines = continuation ? [] : [file.name];
 	for (const { result, preview } of displayRows) {
 		const row = result.position?.start?.row;
 		const lineNumber = Number.isInteger(row) ? `${row + 1}: ` : "";
@@ -477,6 +546,7 @@ async function finishSearchTask(version = searchVersion) {
 		searchResult.setGhostText(strings["no result"], { row: 0, column: 0 });
 	}
 
+	$progress.value = 100;
 	searching = false;
 	nativeSearchId = null;
 	$indexStatus.value = "";
@@ -545,6 +615,7 @@ function onInput(e) {
 	resultOverview.reset();
 	resetResultScroll();
 	clearPendingResultText();
+	clearNativeResultQueue();
 	searchResult.setValue("");
 	removeEvents();
 	if (!$search.value) {
@@ -569,17 +640,23 @@ async function searchAll() {
 		return;
 	}
 
-	addEvents();
-
 	const version = searchVersion;
-	await waitForFileListIfReady();
+	await waitForFileListIfReady(version);
 	if (version !== searchVersion) return;
 
+	addEvents();
 	const allFiles = files().filter((file) => !helpers.isBinary(file));
-	const forceUrls = new Set();
+	const nativeRoots = addedFolder
+		.filter(({ listFiles }) => listFiles)
+		.map(({ url }) => url)
+		.filter((url) => supportsNativeSearch(url));
+	const nativeOpenFiles = [];
 	editorManager.files.forEach((file) => {
 		if (!file.uri || helpers.isBinary(file.uri)) return;
-		forceUrls.add(file.uri);
+		if (supportsNativeSearch(file.uri)) {
+			nativeOpenFiles.push(new Tree(file.name, file.uri, false));
+			return;
+		}
 		const exists = allFiles.find((f) => f.url === file.uri);
 		if (exists) return;
 
@@ -588,7 +665,7 @@ async function searchAll() {
 
 	const filesToSearch = allFiles;
 
-	if (!filesToSearch.length) {
+	if (!filesToSearch.length && !nativeRoots.length && !nativeOpenFiles.length) {
 		searchResult.setGhostText(strings["no result"], { row: 0, column: 0 });
 		$progress.value = 100;
 		return;
@@ -599,16 +676,20 @@ async function searchAll() {
 	fileNames.length = 0;
 	currentSearchRegex = regex;
 	searchResult.setGhostText(strings["searching..."], { row: 0, column: 0 });
-	const nativeFiles = filesToSearch.filter((file) =>
-		supportsNativeSearch(file.url),
-	);
 	const workerFiles = filesToSearch.filter(
 		(file) => !supportsNativeSearch(file.url),
 	);
 	activeSearchTasks = 0;
-	if (nativeFiles.length) {
+	if (nativeRoots.length || nativeOpenFiles.length) {
 		activeSearchTasks += 1;
-		sendNativeSearch("search", nativeFiles, search, options);
+		sendNativeSearch(
+			"search",
+			nativeOpenFiles,
+			search,
+			options,
+			undefined,
+			nativeRoots,
+		);
 	}
 	if (workerFiles.length) {
 		activeSearchTasks += 1;
@@ -620,9 +701,10 @@ async function readSearchFileContent(uri) {
 	if (helpers.isBinary(uri)) return "";
 
 	const editorFile = editorManager.getFile(uri, "uri");
-	if (editorFile?.session?.doc) {
+	const editorDocument = getSearchEditorDocument(editorFile);
+	if (editorDocument) {
 		try {
-			return getDocText(editorFile.session.doc);
+			return getDocText(editorDocument);
 		} catch (_) {
 			return "";
 		}
@@ -631,8 +713,20 @@ async function readSearchFileContent(uri) {
 	return fsOperation(uri).readFile(settings.value.defaultFileEncoding);
 }
 
+function getSearchEditorDocument(file) {
+	const document = file?.session?.doc;
+	if (!document) return null;
+	if (file.loaded) return document;
+
+	// Remote files can expose non-empty unsaved recovery text while their source
+	// is still loading. An inactive restored tab instead has an empty placeholder.
+	if (file.loading && file.isUnsaved && document.length > 0) return document;
+	return null;
+}
+
 function supportsNativeSearch(url = "") {
 	return (
+		fileIndex.supports(url) &&
 		typeof sdcard !== "undefined" &&
 		typeof sdcard.workspaceSearch === "function" &&
 		(/^file:/.test(url) || /^content:/.test(url))
@@ -649,7 +743,14 @@ function cancelNativeSearch() {
 	nativeSearchId = null;
 }
 
-function sendNativeSearch(mode, searchFiles, search, options, replace) {
+function sendNativeSearch(
+	mode,
+	searchFiles,
+	search,
+	options,
+	replace,
+	roots = [],
+) {
 	const id = `search-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 	const version = searchVersion;
 	nativeSearchId = id;
@@ -658,12 +759,14 @@ function sendNativeSearch(mode, searchFiles, search, options, replace) {
 			id,
 			mode,
 			files: searchFiles.map((file) => file.toJSON()),
+			roots,
 			search,
 			replace,
 			options,
-			overlays: getOpenFileOverlays(searchFiles),
+			overlays: getOpenFileOverlays(),
 			defaultEncoding: settings.value.defaultFileEncoding,
 			useIndex: store.useIndex,
+			batchResults: true,
 		},
 		async (event) => {
 			if (
@@ -678,10 +781,13 @@ function sendNativeSearch(mode, searchFiles, search, options, replace) {
 					$indexStatus.value = event.message || "";
 					break;
 				case "progress":
-					$progress.value = event.data || 0;
+					$progress.value = Math.min(event.data || 0, 99);
 					break;
 				case "search-result":
 					appendSearchResult(event.data);
+					break;
+				case "search-results":
+					enqueueNativeSearchResults(event.data, version);
 					break;
 				case "replace-result":
 					filesReplaced.push(event.file);
@@ -692,7 +798,14 @@ function sendNativeSearch(mode, searchFiles, search, options, replace) {
 					break;
 				case "done-searching":
 					nativeSearchId = null;
-					await finishSearchTask(version);
+					if (
+						nativeResultCursor < nativeResultQueue.length ||
+						nativeResultFrame
+					) {
+						pendingNativeSearchFinishVersion = version;
+					} else {
+						await finishSearchTask(version);
+					}
 					break;
 				case "done-replacing":
 					nativeSearchId = null;
@@ -702,6 +815,7 @@ function sendNativeSearch(mode, searchFiles, search, options, replace) {
 					console.error(event.error);
 					$error.value = event.error || "Native search failed";
 					nativeSearchId = null;
+					clearNativeResultQueue();
 					await (mode === "replace"
 						? finishReplaceTask(version)
 						: finishSearchTask(version));
@@ -713,6 +827,7 @@ function sendNativeSearch(mode, searchFiles, search, options, replace) {
 			console.error(error);
 			$error.value = error?.message || String(error);
 			nativeSearchId = null;
+			clearNativeResultQueue();
 			await (mode === "replace"
 				? finishReplaceTask(version)
 				: finishSearchTask(version));
@@ -720,14 +835,14 @@ function sendNativeSearch(mode, searchFiles, search, options, replace) {
 	);
 }
 
-function getOpenFileOverlays(searchFiles) {
-	const supportedUrls = new Set(searchFiles.map(({ url }) => url));
+function getOpenFileOverlays() {
 	const overlays = {};
 	editorManager.files.forEach((file) => {
-		if (!file.uri || !supportedUrls.has(file.uri)) return;
-		if (!file.session?.doc) return;
+		if (!file.uri || !supportsNativeSearch(file.uri)) return;
+		const editorDocument = getSearchEditorDocument(file);
+		if (!editorDocument) return;
 		try {
-			overlays[file.uri] = getDocText(file.session.doc);
+			overlays[file.uri] = getDocText(editorDocument);
 		} catch (_) {
 			// ignore invalid editor docs
 		}
@@ -735,24 +850,36 @@ function getOpenFileOverlays(searchFiles) {
 	return overlays;
 }
 
-async function waitForFileListIfReady() {
-	const result = await withTimeout(waitForFileList(), FILE_LIST_WAIT_TIMEOUT);
+async function waitForFileListIfReady(version) {
+	const ready = waitForFileList();
+	pendingDiscoveryVersion = version;
+	let result = await withTimeout(ready, FILE_LIST_WAIT_TIMEOUT);
+	if (version !== searchVersion) return;
 	if (result === TIMEOUT) {
 		$indexStatus.value = "Scanning project files...";
+		result = await withTimeout(
+			ready,
+			FILE_LIST_MAX_WAIT - FILE_LIST_WAIT_TIMEOUT,
+		);
 	}
+	if (version !== searchVersion) return;
+	$indexStatus.value = "";
+	if (result !== TIMEOUT) {
+		pendingDiscoveryVersion = null;
+		return;
+	}
+	$error.value =
+		"Project scan is still running; search results may be incomplete.";
+	void ready.then(() => {
+		if (version !== searchVersion) return;
+		pendingDiscoveryVersion = null;
+		$error.value =
+			"Project scan finished; search again to include newly discovered files.";
+	});
 }
 
 function markIndexDirty(urls) {
-	if (
-		typeof sdcard !== "undefined" &&
-		typeof sdcard.workspaceMarkDirty === "function"
-	) {
-		try {
-			sdcard.workspaceMarkDirty(urls);
-		} catch (_) {
-			// ignore native dirty-mark failures
-		}
-	}
+	fileIndex.markDirty(urls).catch(() => {});
 }
 
 function appendSearchResultText(text) {
@@ -780,10 +907,13 @@ function clearPendingResultText() {
 const TIMEOUT = Symbol("timeout");
 
 function withTimeout(promise, ms) {
+	let timer;
 	return Promise.race([
 		promise,
-		new Promise((resolve) => setTimeout(() => resolve(TIMEOUT), ms)),
-	]);
+		new Promise((resolve) => {
+			timer = setTimeout(() => resolve(TIMEOUT), ms);
+		}),
+	]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -859,6 +989,11 @@ function sendMessage(action, files, search, options, replace) {
  */
 function onErrorMessage(e) {
 	console.error(e);
+	if (e.target.searchVersion !== searchVersion) return;
+	$error.value = e.message || "Search worker failed";
+	terminateWorker(false);
+	if (replacing) void finishReplaceTask(searchVersion);
+	else void finishSearchTask(searchVersion);
 }
 
 /**
@@ -867,7 +1002,10 @@ function onErrorMessage(e) {
  * @param {boolean} [initializeNewWorkers=true] - Whether to initialize new workers after terminating the existing ones.
  */
 function terminateWorker(initializeNewWorkers = true) {
-	workers.forEach((worker) => worker.terminate());
+	workers.forEach((worker) => {
+		clearTimeout(worker.searchWatchdog);
+		worker.terminate();
+	});
 	workers.length = 0;
 
 	if (!initializeNewWorkers) return;
@@ -1022,27 +1160,13 @@ async function onCursorChange(line) {
 	const result = results[line];
 	if (!result) return;
 	const { file, position } = result;
-	if (!position) {
-		// header line clicked; CM view folding not implemented yet
-		return;
-	}
+	const url = filesSearched[file]?.url;
+	if (!position || !url) return;
 
 	rememberResultScroll();
 	Sidebar.hide();
-	const { url } = filesSearched[file];
-	await openFile(url, { render: true });
-	const { editor } = editorManager;
 	try {
-		// Compute offsets from row/column (rows from worker are 0-based)
-		const doc = editor.state.doc;
-		const startLine = doc.line(position.start.row + 1);
-		const endLine = doc.line(position.end.row + 1);
-		const from = Math.min(startLine.from + position.start.column, startLine.to);
-		const to = Math.min(endLine.from + position.end.column, endLine.to);
-		editor.dispatch({
-			selection: { anchor: from, head: to },
-			effects: EditorView.scrollIntoView(from, { y: "center" }),
-		});
+		await navigateToResult(url, position);
 	} catch (error) {
 		console.warn(`Failed to focus search result at line ${line}.`, error);
 	}
@@ -1052,6 +1176,13 @@ async function onCursorChange(line) {
  * When a file is added or removed from the file list
  * @param {import('lib/fileList').Tree} tree
  */
+function onFileAdded(tree) {
+	// Discovery emits add-file for every entry. After a timeout, retain the
+	// snapshot results instead of repeatedly clearing them as entries arrive.
+	if (pendingDiscoveryVersion === searchVersion) return;
+	onFileUpdate(tree);
+}
+
 function onFileUpdate(tree) {
 	if (!tree || tree?.children) return;
 	markIndexDirty([tree.url]);
@@ -1093,7 +1224,7 @@ function resetResultScroll() {
  * Add event listeners to file changes
  */
 function addEvents() {
-	files.on("add-file", onFileUpdate);
+	files.on("add-file", onFileAdded);
 	files.on("remove-file", onFileUpdate);
 	files.on("add-folder", onInput);
 	files.on("remove-folder", onInput);
@@ -1106,7 +1237,7 @@ function addEvents() {
  * Remove event listeners to file changes
  */
 function removeEvents() {
-	files.off("add-file", onFileUpdate);
+	files.off("add-file", onFileAdded);
 	files.off("remove-file", onFileUpdate);
 	files.off("add-folder", onInput);
 	files.off("remove-folder", onInput);

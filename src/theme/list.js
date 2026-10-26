@@ -11,8 +11,13 @@ const appThemes = new Map();
 let themeApplied = false;
 let firstTime = true;
 
+const darkModeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+let systemThemeWatcherActive = false;
+
 function init() {
 	themes.forEach((theme) => add(theme));
+	updateSystemThemeWatcher(settings.value.appTheme);
+	settings.on("update:appTheme", updateSystemThemeWatcher);
 }
 
 /**
@@ -81,6 +86,11 @@ function add(theme) {
 export async function apply(id, init) {
 	if (!DOES_SUPPORT_THEME) {
 		id = "default";
+	}
+	if (id.toLowerCase() === "system") {
+		// Refresh the mutable System theme before reading its preferred editor
+		// theme. Do not re-enter apply() while appTheme is being updated below.
+		updateSystemTheme(isDeviceDarkTheme(), false);
 	}
 
 	themeApplied = true;
@@ -159,6 +169,48 @@ export function update(theme) {
 	});
 }
 
+function syncSystemTheme(event, applyTheme = true) {
+	if (settings.value.appTheme.toLowerCase() !== "system") return;
+	const isDark = event ? event.matches : darkModeMediaQuery.matches;
+	updateSystemTheme(isDark, applyTheme);
+}
+
+function startSystemThemeWatcher() {
+	if (systemThemeWatcherActive) return;
+	systemThemeWatcherActive = true;
+	if (typeof darkModeMediaQuery.addEventListener === "function") {
+		darkModeMediaQuery.addEventListener("change", syncSystemTheme);
+	} else {
+		darkModeMediaQuery.addListener(syncSystemTheme);
+	}
+}
+
+function stopSystemThemeWatcher() {
+	if (!systemThemeWatcherActive) return;
+	systemThemeWatcherActive = false;
+	if (typeof darkModeMediaQuery.removeEventListener === "function") {
+		darkModeMediaQuery.removeEventListener("change", syncSystemTheme);
+	} else {
+		darkModeMediaQuery.removeListener(syncSystemTheme);
+	}
+}
+
+/**
+ * Start or stop syncing the app theme with the OS color scheme
+ * @param {string} theme
+ */
+export function updateSystemThemeWatcher(theme) {
+	if (String(theme).toLowerCase() === "system") {
+		startSystemThemeWatcher();
+		// Starting the watcher happens from the appTheme update listener. Applying
+		// the theme here would update appTheme again before the first settings
+		// update is saved, causing unbounded synchronous recursion.
+		syncSystemTheme(undefined, false);
+		return;
+	}
+	stopSystemThemeWatcher();
+}
+
 export default {
 	get applied() {
 		return themeApplied;
@@ -169,4 +221,5 @@ export default {
 	add,
 	apply,
 	update,
+	updateSystemThemeWatcher,
 };

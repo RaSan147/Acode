@@ -1,4 +1,5 @@
 import lspApi from "cm/lsp/api";
+import lspClientManager from "cm/lsp/clientManager";
 import {
 	checkRuntimeServerInstallation,
 	getRuntimeInstallCommand,
@@ -153,18 +154,19 @@ function formatStartupTimeoutValue(timeout) {
 		: strings["lsp-default"];
 }
 
+// PRoot prints `can't sanitize binding "/proc/self/fd/N"` when one of the
+// session's stdio descriptors is a pipe/socket and therefore cannot be
+// canonicalized (see init-sandbox.sh).  Drop only that known, harmless message
+// so genuine proot warnings still reach the UI.
+const PROOT_FD_BINDING_WARNING =
+	/can'?t sanitize binding "\/proc\/self\/fd(?:\/[012])?"/i;
+
 function sanitizeInstallMessage(message) {
 	const lines = String(message || "")
 		.split("\n")
 		.map((line) => line.trim())
 		.filter(Boolean)
-		.filter(
-			(line) =>
-				!/^proot warning:/i.test(line) &&
-				!line.includes(`"/proc/self/fd/0"`) &&
-				!line.includes(`"/proc/self/fd/1"`) &&
-				!line.includes(`"/proc/self/fd/2"`),
-		);
+		.filter((line) => !PROOT_FD_BINDING_WARNING.test(line));
 
 	return lines.join(" ");
 }
@@ -488,6 +490,10 @@ async function persistClientConfig(serverId, clientConfig) {
 		clientConfig: {
 			...(current.clientConfig || {}),
 			...clientConfig,
+			builtinExtensions: {
+				...(current.clientConfig?.builtinExtensions || {}),
+				...(clientConfig.builtinExtensions || {}),
+			},
 		},
 	}));
 }
@@ -566,7 +572,19 @@ export default function lspServerDetail(serverId) {
 	};
 
 	async function callback(key, value) {
-		const $loader = loader.create("LSP", strings["loading..."]);
+		const isSwitch =
+			key === "enabled" ||
+			[
+				"ext_hover",
+				"ext_completion",
+				"ext_signature",
+				"ext_diagnostics",
+				"ext_inlayHints",
+				"ext_formatting",
+			].includes(key);
+		const $loader = isSwitch
+			? null
+			: loader.create("LSP", strings["loading..."]);
 
 		try {
 			const snapshot = await buildSnapshot(serverId);
@@ -579,6 +597,7 @@ export default function lspServerDetail(serverId) {
 				case "enabled":
 					await persistEnabled(serverId, value);
 					if (!value) {
+						await lspClientManager.disposeServer(serverId);
 						stopManagedServer(serverId);
 					}
 					toast(
@@ -589,7 +608,7 @@ export default function lspServerDetail(serverId) {
 					break;
 
 				case "remove_custom_server":
-					$loader.hide();
+					$loader?.hide();
 					if (
 						!(await confirm(
 							strings["lsp-remove-custom-server"],
@@ -600,7 +619,8 @@ export default function lspServerDetail(serverId) {
 					) {
 						break;
 					}
-					$loader.show();
+					$loader?.show();
+					await lspClientManager.disposeServer(serverId);
 					stopManagedServer(serverId);
 					await removeCustomServer(serverId);
 					toast(strings["lsp-custom-server-removed"]);
@@ -610,7 +630,7 @@ export default function lspServerDetail(serverId) {
 
 				case "install_status": {
 					const result = await checkRuntimeServerInstallation(snapshot.merged);
-					$loader.hide();
+					$loader?.hide();
 					const lines = [
 						fillTemplate(strings["lsp-status-line"], {
 							status: formatInstallStatus(result),
@@ -649,7 +669,7 @@ export default function lspServerDetail(serverId) {
 						toast(strings["lsp-uninstall-command-unavailable"]);
 						break;
 					}
-					$loader.hide();
+					$loader?.hide();
 					if (
 						!(await confirm(
 							strings["lsp-uninstall-server"],
@@ -660,7 +680,7 @@ export default function lspServerDetail(serverId) {
 					) {
 						break;
 					}
-					$loader.show();
+					$loader?.show();
 					await uninstallRuntimeServer(snapshot.merged);
 					toast(strings["lsp-server-uninstalled"]);
 					break;
@@ -670,7 +690,7 @@ export default function lspServerDetail(serverId) {
 						snapshot.override.startupTimeout ??
 						snapshot.liveServer.startupTimeout ??
 						5000;
-					$loader.hide();
+					$loader?.hide();
 					const result = await prompt(
 						strings["lsp-startup-timeout-ms"],
 						String(currentTimeout),
@@ -693,7 +713,7 @@ export default function lspServerDetail(serverId) {
 						break;
 					}
 
-					$loader.show();
+					$loader?.show();
 					await persistStartupTimeout(serverId, timeout);
 					toast(
 						fillTemplate(strings["lsp-startup-timeout-set"], {
@@ -709,7 +729,7 @@ export default function lspServerDetail(serverId) {
 						null,
 						2,
 					);
-					$loader.hide();
+					$loader?.hide();
 					const result = await prompt(
 						strings["lsp-initialization-options-json"],
 						currentJson || "{}",
@@ -730,7 +750,7 @@ export default function lspServerDetail(serverId) {
 						break;
 					}
 
-					$loader.show();
+					$loader?.show();
 					await persistInitOptions(serverId, JSON.parse(result));
 					toast(strings["lsp-initialization-options-updated"]);
 					break;
@@ -742,7 +762,7 @@ export default function lspServerDetail(serverId) {
 						null,
 						2,
 					);
-					$loader.hide();
+					$loader?.hide();
 					alert(
 						strings["lsp-initialization-options"],
 						`<pre style="overflow: auto; max-height: 60vh; font-size: 12px;">${escapeHtml(json)}</pre>`,
@@ -757,9 +777,6 @@ export default function lspServerDetail(serverId) {
 				case "ext_inlayHints":
 				case "ext_formatting": {
 					const extKey = key.replace("ext_", "");
-					const feature = getFeatureItems().find(
-						([featureKey]) => featureKey === key,
-					);
 					const currentClientConfig = clone(
 						snapshot.override.clientConfig || {},
 					);
@@ -772,14 +789,6 @@ export default function lspServerDetail(serverId) {
 							[extKey]: value,
 						},
 					});
-					toast(
-						fillTemplate(strings["lsp-feature-state-toast"], {
-							feature: feature?.[2] || extKey,
-							state: value
-								? strings["lsp-state-enabled"]
-								: strings["lsp-state-disabled"],
-						}),
-					);
 					break;
 				}
 
@@ -792,7 +801,7 @@ export default function lspServerDetail(serverId) {
 				await refreshVisibleState($connectedList, itemsByKey, serverId);
 			}
 		} finally {
-			$loader.destroy();
+			$loader?.destroy();
 		}
 	}
 }

@@ -8,8 +8,12 @@ import {
 	StateEffect,
 	StateField,
 } from "@codemirror/state";
-import { type EditorView, ViewPlugin } from "@codemirror/view";
+import { type EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
+import { addLspLogFor } from "./logs";
+import { safeLspPositionToOffset } from "./positionUtils";
 import type {
+	DocumentDiagnosticParams,
+	DocumentDiagnosticReport,
 	LSPClientWithWorkspace,
 	LSPPluginAPI,
 	LspDiagnostic,
@@ -17,11 +21,53 @@ import type {
 	RawDiagnostic,
 } from "./types";
 
-const setPublishedDiagnostics = StateEffect.define<LspDiagnostic[]>();
+interface PublishedDiagnosticsUpdate {
+	client?: LSPClient;
+	diagnostics?: LspDiagnostic[];
+	clearAll?: boolean;
+}
+
+const setPublishedDiagnostics =
+	StateEffect.define<PublishedDiagnosticsUpdate>();
 let diagnosticsEventTimer: ReturnType<typeof setTimeout> | null = null;
 let diagnosticsViewCount = 0;
 
 export const LSP_DIAGNOSTICS_EVENT = "acode:lsp-diagnostics-updated";
+const PULL_DIAGNOSTICS_DELAY = 250;
+
+interface PullDiagnosticsState {
+	timers: Map<string, ReturnType<typeof setTimeout>>;
+	generations: Map<string, number>;
+	resultIds: Map<string, string>;
+	failures: Map<string, number>;
+}
+
+const pullDiagnosticsStates = new WeakMap<LSPClient, PullDiagnosticsState>();
+
+function getPullDiagnosticsState(client: LSPClient): PullDiagnosticsState {
+	let state = pullDiagnosticsStates.get(client);
+	if (!state) {
+		state = {
+			timers: new Map(),
+			generations: new Map(),
+			resultIds: new Map(),
+			failures: new Map(),
+		};
+		pullDiagnosticsStates.set(client, state);
+	}
+	return state;
+}
+
+function supportsPullDiagnostics(client: LSPClient): boolean {
+	return !!client.serverCapabilities?.diagnosticProvider;
+}
+
+function diagnosticsEnabledForFile(client: LSPClient, uri: string): boolean {
+	const file = client.workspace.getFile(uri);
+	const view = file?.getView();
+	const plugin = view && LSPPlugin.get(view, client);
+	return !!plugin?.featureEnabled("diagnostics");
+}
 
 function isCoarsePointerDevice(): boolean {
 	if (typeof window !== "undefined") {
@@ -74,17 +120,44 @@ function clearScheduledDiagnosticsUpdated(): void {
 	diagnosticsEventTimer = null;
 }
 
-const lspPublishedDiagnostics = StateField.define<LspDiagnostic[]>({
-	create(): LspDiagnostic[] {
-		return [];
+const lspPublishedDiagnostics = StateField.define<
+	ReadonlyMap<LSPClient, LspDiagnostic[]>
+>({
+	create(): ReadonlyMap<LSPClient, LspDiagnostic[]> {
+		return new Map();
 	},
-	update(value: LspDiagnostic[], tr): LspDiagnostic[] {
-		for (const effect of tr.effects) {
-			if (effect.is(setPublishedDiagnostics)) {
-				value = effect.value;
+	update(value: ReadonlyMap<LSPClient, LspDiagnostic[]>, tr) {
+		let next = value;
+		if (tr.docChanged && value.size) {
+			next = new Map();
+			for (const [client, diagnostics] of value) {
+				const mapped: LspDiagnostic[] = [];
+				for (const diagnostic of diagnostics) {
+					const from = tr.changes.mapPos(diagnostic.from, 1, MapMode.TrackDel);
+					const to = tr.changes.mapPos(diagnostic.to, -1, MapMode.TrackDel);
+					if (from != null && to != null) {
+						mapped.push({ ...diagnostic, from, to });
+					}
+				}
+				(next as Map<LSPClient, LspDiagnostic[]>).set(client, mapped);
 			}
 		}
-		return value;
+		for (const effect of tr.effects) {
+			if (effect.is(setPublishedDiagnostics)) {
+				if (effect.value.clearAll) {
+					next = new Map();
+				} else if (effect.value.client) {
+					const updated = new Map(next);
+					if (effect.value.diagnostics?.length) {
+						updated.set(effect.value.client, effect.value.diagnostics);
+					} else {
+						updated.delete(effect.value.client);
+					}
+					next = updated;
+				}
+			}
+		}
+		return next;
 	},
 });
 
@@ -102,19 +175,17 @@ function collectLspDiagnostics(
 	diagnostics: RawDiagnostic[],
 ): LspDiagnostic[] {
 	const items: LspDiagnostic[] = [];
-	const { syncedDoc } = plugin;
-
 	for (const diagnostic of diagnostics) {
 		let from: number;
 		let to: number;
 		try {
-			const mappedFrom = plugin.fromPosition(
+			const mappedFrom = safeLspPositionToOffset(
+				plugin.syncedDoc,
 				diagnostic.range.start,
-				plugin.syncedDoc,
 			);
-			const mappedTo = plugin.fromPosition(
-				diagnostic.range.end,
+			const mappedTo = safeLspPositionToOffset(
 				plugin.syncedDoc,
+				diagnostic.range.end,
 			);
 			const fromResult = plugin.unsyncedChanges.mapPos(mappedFrom);
 			const toResult = plugin.unsyncedChanges.mapPos(mappedTo);
@@ -124,7 +195,7 @@ function collectLspDiagnostics(
 		} catch (_) {
 			continue;
 		}
-		if (to > syncedDoc.length) continue;
+		if (to > plugin.unsyncedChanges.newLength) continue;
 
 		const severity = severities[diagnostic.severity ?? 0] ?? "info";
 		const source = diagnostic.code
@@ -144,9 +215,10 @@ function collectLspDiagnostics(
 }
 
 function storeLspDiagnostics(
+	client: LSPClient,
 	items: LspDiagnostic[],
-): StateEffect<LspDiagnostic[]> {
-	return setPublishedDiagnostics.of(items);
+): StateEffect<PublishedDiagnosticsUpdate> {
+	return setPublishedDiagnostics.of({ client, diagnostics: items });
 }
 
 function sameDiagnostics(
@@ -168,6 +240,223 @@ function sameDiagnostics(
 		}
 	}
 	return true;
+}
+
+function applyDiagnostics(
+	client: LSPClient,
+	uri: string,
+	version: number | undefined,
+	rawDiagnostics: RawDiagnostic[],
+): boolean {
+	const clientWithWorkspace = client as unknown as LSPClientWithWorkspace;
+	const file = clientWithWorkspace.workspace.getFile(uri);
+	if (!file || (version != null && version !== file.version)) {
+		return false;
+	}
+	const view = file.getView();
+	if (!view) return false;
+	const plugin = LSPPlugin.get(view, client);
+	if (!plugin || !plugin.featureEnabled("diagnostics")) return false;
+
+	const diagnostics = collectLspDiagnostics(
+		plugin as unknown as LSPPluginAPI,
+		rawDiagnostics,
+	);
+	const current =
+		view.state.field(lspPublishedDiagnostics, false)?.get(client) ?? [];
+	if (sameDiagnostics(current, diagnostics)) {
+		return true;
+	}
+
+	view.dispatch({
+		effects: storeLspDiagnostics(client, diagnostics),
+	});
+	scheduleDiagnosticsUpdated();
+	return true;
+}
+
+async function pullDiagnostics(
+	client: LSPClient,
+	uri: string,
+	generation: number,
+): Promise<void> {
+	if (
+		!supportsPullDiagnostics(client) ||
+		!diagnosticsEnabledForFile(client, uri)
+	) {
+		return;
+	}
+
+	client.sync();
+	const clientWithWorkspace = client as unknown as LSPClientWithWorkspace;
+	const file = clientWithWorkspace.workspace.getFile(uri);
+	if (!file) return;
+
+	const state = getPullDiagnosticsState(client);
+	const version = file.version;
+	const provider = client.serverCapabilities?.diagnosticProvider;
+	const params: DocumentDiagnosticParams = {
+		textDocument: { uri },
+	};
+	if (
+		provider &&
+		typeof provider === "object" &&
+		"identifier" in provider &&
+		typeof provider.identifier === "string"
+	) {
+		params.identifier = provider.identifier;
+	}
+	const previousResultId = state.resultIds.get(uri);
+	if (previousResultId !== undefined) {
+		params.previousResultId = previousResultId;
+	}
+
+	try {
+		const report = await client.request<
+			DocumentDiagnosticParams,
+			DocumentDiagnosticReport
+		>("textDocument/diagnostic", params);
+		if (state.generations.get(uri) !== generation) return;
+		state.failures.delete(uri);
+
+		const currentFile = clientWithWorkspace.workspace.getFile(uri);
+		if (!currentFile || currentFile.version !== version) {
+			schedulePullDiagnostics(client, uri, 0);
+			return;
+		}
+
+		if (report.kind === "unchanged") {
+			state.resultIds.set(uri, report.resultId);
+			return;
+		}
+
+		if (typeof report.resultId === "string") {
+			state.resultIds.set(uri, report.resultId);
+		} else {
+			state.resultIds.delete(uri);
+		}
+		applyDiagnostics(client, uri, version, report.items);
+	} catch (error) {
+		if (state.generations.get(uri) === generation) {
+			const message = error instanceof Error ? error.message : String(error);
+			const failures = (state.failures.get(uri) ?? 0) + 1;
+			state.failures.set(uri, failures);
+			if (/timed out/i.test(message) && failures <= 2) {
+				schedulePullDiagnostics(client, uri, failures * 750);
+				return;
+			}
+			addLspLogFor(
+				client,
+				"warn",
+				`Diagnostic pull failed for ${uri}: ${message}`,
+				error,
+			);
+			console.warn(`[LSP:Diagnostics] Pull failed for ${uri}`, error);
+		}
+	}
+}
+
+export function schedulePullDiagnostics(
+	client: LSPClient,
+	uri: string,
+	delay = PULL_DIAGNOSTICS_DELAY,
+): void {
+	if (!diagnosticsEnabledForFile(client, uri)) return;
+	if (!supportsPullDiagnostics(client)) {
+		if (client.connected && !client.serverCapabilities) {
+			void client.initializing
+				.then(() => {
+					schedulePullDiagnostics(client, uri, delay);
+				})
+				.catch(() => {});
+		}
+		return;
+	}
+
+	const state = getPullDiagnosticsState(client);
+	const existing = state.timers.get(uri);
+	if (existing != null) clearTimeout(existing);
+
+	const generation = (state.generations.get(uri) ?? 0) + 1;
+	state.generations.set(uri, generation);
+	state.timers.set(
+		uri,
+		setTimeout(
+			() => {
+				state.timers.delete(uri);
+				void pullDiagnostics(client, uri, generation);
+			},
+			Math.max(0, delay),
+		),
+	);
+}
+
+export function schedulePullDiagnosticsForOpenFiles(
+	client: LSPClient,
+	delay = 0,
+): void {
+	if (!supportsPullDiagnostics(client)) return;
+	for (const file of client.workspace.files) {
+		schedulePullDiagnostics(client, file.uri, delay);
+	}
+}
+
+export function forgetPullDiagnostics(client: LSPClient, uri: string): void {
+	const state = pullDiagnosticsStates.get(client);
+	if (!state) return;
+	const timer = state.timers.get(uri);
+	if (timer != null) clearTimeout(timer);
+	state.timers.delete(uri);
+	state.generations.delete(uri);
+	state.resultIds.delete(uri);
+	state.failures.delete(uri);
+}
+
+export function disposePullDiagnostics(client: LSPClient): void {
+	const state = pullDiagnosticsStates.get(client);
+	if (!state) return;
+	for (const timer of state.timers.values()) {
+		clearTimeout(timer);
+	}
+	state.generations.clear();
+	state.failures.clear();
+	pullDiagnosticsStates.delete(client);
+}
+
+export function lspDiagnosticsAutoSyncExtension(): Extension {
+	return ViewPlugin.fromClass(
+		class {
+			pending: ReturnType<typeof setTimeout> | null = null;
+			view: EditorView;
+
+			constructor(view: EditorView) {
+				this.view = view;
+				this.schedule(0);
+			}
+
+			update(update: ViewUpdate): void {
+				if (!update.docChanged) return;
+				this.schedule(500);
+			}
+
+			schedule(delay: number): void {
+				if (this.pending != null) clearTimeout(this.pending);
+				this.pending = setTimeout(() => this.flush(), delay);
+			}
+
+			flush(): void {
+				this.pending = null;
+				for (const plugin of LSPPlugin.getAll(this.view, "diagnostics")) {
+					plugin.client.sync();
+					schedulePullDiagnostics(plugin.client, plugin.uri, 0);
+				}
+			}
+
+			destroy(): void {
+				if (this.pending != null) clearTimeout(this.pending);
+			}
+		},
+	);
 }
 
 function scheduleDiagnosticsUpdated(): void {
@@ -195,42 +484,21 @@ const diagnosticsLifecyclePlugin = ViewPlugin.fromClass(
 	},
 );
 
-function mapDiagnostics(
-	plugin: LSPPluginAPI,
-	state: EditorState,
-): Diagnostic[] {
-	const stored = state.field(lspPublishedDiagnostics);
-	const changes = plugin.unsyncedChanges;
-	const mapped: Diagnostic[] = [];
-
-	for (const diagnostic of stored) {
-		let from: number | null;
-		let to: number | null;
-		try {
-			from = changes.mapPos(diagnostic.from, 1, MapMode.TrackDel);
-			to = changes.mapPos(diagnostic.to, -1, MapMode.TrackDel);
-		} catch (_) {
-			continue;
-		}
-		if (from != null && to != null) {
-			mapped.push({ ...diagnostic, from, to });
-		}
-	}
-
-	return mapped;
-}
-
 function lspLinterSource(view: EditorView): Diagnostic[] {
-	const plugin = LSPPlugin.get(view) as LSPPluginAPI | null;
-	if (!plugin) return [];
-	return mapDiagnostics(plugin, view.state);
+	const stored = view.state.field(lspPublishedDiagnostics);
+	const diagnostics: Diagnostic[] = [];
+	for (const [client, items] of stored) {
+		const plugin = LSPPlugin.get(view, client);
+		if (plugin?.featureEnabled("diagnostics")) diagnostics.push(...items);
+	}
+	return diagnostics;
 }
 
 export function lspDiagnosticsClientExtension(): {
 	clientCapabilities: Record<string, unknown>;
 	notificationHandlers: Record<
 		string,
-		(client: LSPClient, params: PublishDiagnosticsParams) => boolean
+		(client: LSPClient, params: unknown) => boolean
 	>;
 } {
 	return {
@@ -242,46 +510,48 @@ export function lspDiagnosticsClientExtension(): {
 					dataSupport: true,
 					versionSupport: true,
 				},
+				diagnostic: {
+					dynamicRegistration: false,
+					relatedDocumentSupport: false,
+				},
+			},
+			workspace: {
+				diagnostics: {
+					refreshSupport: true,
+				},
 			},
 		},
 		notificationHandlers: {
 			"textDocument/publishDiagnostics": (
 				client: LSPClient,
-				params: PublishDiagnosticsParams,
+				rawParams: unknown,
 			): boolean => {
-				const clientWithWorkspace = client as unknown as LSPClientWithWorkspace;
-				const file = clientWithWorkspace.workspace.getFile(params.uri);
-				if (
-					!file ||
-					(params.version != null && params.version !== file.version)
-				) {
-					return true;
-				}
-				const view = file.getView();
-				if (!view) return true;
-				const plugin = LSPPlugin.get(view) as LSPPluginAPI | null;
-				if (!plugin) return true;
-
-				const diagnostics = collectLspDiagnostics(plugin, params.diagnostics);
-				const current = view.state.field(lspPublishedDiagnostics, false) ?? [];
-				if (sameDiagnostics(current, diagnostics)) {
-					return true;
-				}
-
-				view.dispatch({
-					effects: storeLspDiagnostics(diagnostics),
-				});
-				scheduleDiagnosticsUpdated();
+				const params = rawParams as PublishDiagnosticsParams;
+				applyDiagnostics(
+					client,
+					params.uri,
+					params.version,
+					params.diagnostics,
+				);
+				return true;
+			},
+			"workspace/diagnostic/refresh": (client: LSPClient): boolean => {
+				schedulePullDiagnosticsForOpenFiles(client);
 				return true;
 			},
 		},
 	};
 }
 
-export function lspDiagnosticsUiExtension(includeGutter = true): Extension[] {
-	const diagnosticsMarkerFilter = isCoarsePointerDevice()
-		? () => []
-		: undefined;
+export function lspDiagnosticsUiExtension(
+	includeGutter = true,
+	{ canvas = false }: { canvas?: boolean } = {},
+): Extension[] {
+	// Touch devices get no in-text marks in the DOM editor. Canvas views
+	// (@acode.app/canvas-view) draw them natively (wavy underlines, lint
+	// points) at no layout cost, so they keep them; tooltips stay off.
+	const diagnosticsMarkerFilter =
+		isCoarsePointerDevice() && !canvas ? () => [] : undefined;
 	const diagnosticsTooltipFilter = isCoarsePointerDevice()
 		? () => []
 		: undefined;
@@ -301,13 +571,7 @@ export function lspDiagnosticsUiExtension(includeGutter = true): Extension[] {
 		}),
 	];
 	if (includeGutter) {
-		extensions.splice(
-			1,
-			0,
-			lintGutter({
-				tooltipFilter: diagnosticsTooltipFilter,
-			}),
-		);
+		extensions.splice(1, 0, lintGutter());
 	}
 	return extensions;
 }
@@ -316,7 +580,7 @@ interface DiagnosticsExtension {
 	clientCapabilities: Record<string, unknown>;
 	notificationHandlers: Record<
 		string,
-		(client: LSPClient, params: PublishDiagnosticsParams) => boolean
+		(client: LSPClient, params: unknown) => boolean
 	>;
 	editorExtension: Extension[];
 }
@@ -332,16 +596,22 @@ export function lspDiagnosticsExtension(
 
 export default lspDiagnosticsExtension;
 
-export function clearDiagnosticsEffect(): StateEffect<LspDiagnostic[]> {
-	return setPublishedDiagnostics.of([]);
+export function clearDiagnosticsEffect(
+	client?: LSPClient,
+): StateEffect<PublishedDiagnosticsUpdate> {
+	return setPublishedDiagnostics.of(
+		client ? { client, diagnostics: [] } : { clearAll: true },
+	);
 }
 
 export function getLspDiagnostics(state: EditorState | null): LspDiagnostic[] {
 	if (!state || typeof state.field !== "function") return [];
 	try {
 		const stored = state.field(lspPublishedDiagnostics, false);
-		if (!stored || !Array.isArray(stored)) return [];
-		return stored.map((diagnostic) => ({ ...diagnostic }));
+		if (!stored) return [];
+		return Array.from(stored.values()).flatMap((diagnostics) =>
+			diagnostics.map((diagnostic) => ({ ...diagnostic })),
+		);
 	} catch (_) {
 		return [];
 	}

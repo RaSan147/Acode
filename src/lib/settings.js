@@ -133,8 +133,14 @@ class Settings {
 			fontSize: "12px",
 			cursorWidth: 2,
 			editorTheme: "one_dark",
+			editorRenderer: "dom",
+			canvasBackend: "auto",
+			canvasGutterMarkers: "shared",
+			stickyScroll: false,
+			stickyScrollMaxLines: 5,
+			cursorBlinkRate: 1200,
 			textWrap: false,
-			wrappingIndent: "indent",
+			wrappingIndent: "same",
 			softTab: true,
 			tabSize: 2,
 			retryRemoteFsAfterFail: true,
@@ -169,7 +175,8 @@ class Settings {
 			scrollbarHeight: 50,
 			showSpaces: false,
 			confirmOnExit: true,
-			lineHeight: 2,
+			lineHeight: 1.4,
+			lineHeightMigrated: true,
 			leftMargin: 50,
 			checkFiles: true,
 			checkForAppUpdates: false,
@@ -193,6 +200,7 @@ class Settings {
 				16, 19, 17, 23, 24, 25, 26, 27, 28, 29, 30, 31,
 			],
 			excludeFolders: this.#excludeFolders,
+			useFileOperationExclusions: true,
 			defaultFileEncoding: "UTF-8",
 			inlineAutoCompletion: true,
 			colorPreview: true,
@@ -217,6 +225,8 @@ class Settings {
 			developerMode: false,
 			shiftClickSelection: true,
 			showShareButton: true,
+			appIcon: "default",
+			iconTheme: "builtin",
 		};
 		this.value = structuredClone(this.#defaultSettings);
 	}
@@ -244,6 +254,15 @@ class Settings {
 
 		const settings = helpers.parseJSON(await fs.readFile("utf8"));
 		if (settings) {
+			// The old default line height (2) never reached the editor's lines
+			// (CodeMirror's 1.4 won), so nobody saw it. Now that it applies,
+			// keep what the editor showed instead of doubling line spacing.
+			if (
+				settings.lineHeightMigrated === undefined &&
+				settings.lineHeight === 2
+			)
+				settings.lineHeight = 1.4;
+
 			// make sure that all the settings are present
 			Object.keys(this.#defaultSettings).forEach((setting) => {
 				const value = settings[setting];
